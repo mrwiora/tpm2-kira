@@ -109,8 +109,8 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if cfg, _ := LoadControlConfig(conf); cfg.Attest.Bluetooth != "always" {
 		t.Errorf("the policy kept next to the PIN: %+v", cfg)
 	}
-	if pin, loose := signing.StoredPIN(signing.PINPath()); pin != "123456" || loose {
-		t.Errorf("the PIN read back: %q loose %v", pin, loose)
+	if pin, loose, err := signing.StoredPIN(signing.PINPath()); string(pin) != "123456" || loose || err != nil {
+		t.Errorf("the PIN read back: %q loose %v: %v", pin, loose, err)
 	}
 	// A line this version refuses: the settings are invalid (red Config
 	// line), the PIN in its own file is untouched by it.

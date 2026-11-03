@@ -13,14 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mrwiora/tpm2-kira/internal/pcsc"
 	"github.com/mrwiora/tpm2-kira/internal/piv"
 	"github.com/mrwiora/tpm2-kira/internal/wipe"
-	"golang.org/x/sys/unix"
 )
 
 // ── Key file stub ────────────────────────────────────────────────────────────
@@ -404,9 +402,6 @@ func PrintTokenReport(w io.Writer, infos []TokenInfo) {
 
 // ── Signing through the token ────────────────────────────────────────────────
 
-// PINEnvVar supplies the PIV PIN for unattended use.
-const PINEnvVar = "TPM2_KIRA_PIN"
-
 // YubiKeySigner is a crypto.Signer whose private key lives in a PIV slot.
 //
 // Loading the key file does not touch the token: Public() is served from the
@@ -708,7 +703,7 @@ func (sess *tokenSession) ensurePIN(s *YubiKeySigner, force bool) error {
 			sess.fatal = unavailable(s, "%v", err)
 			return sess.fatal
 		}
-		sess.pin, sess.pinSource = []byte(pin), source
+		sess.pin, sess.pinSource = pin, source
 	}
 	if err := sess.card.VerifyPIN(sess.pin); err != nil {
 		wipe.Bytes(sess.pin)
@@ -716,65 +711,11 @@ func (sess *tokenSession) ensurePIN(s *YubiKeySigner, force bool) error {
 		sess.fatal = unavailable(s, "%v (PIN from %s) — stopping here so no further attempt is spent", err, sess.pinSource)
 		return sess.fatal
 	}
-	if !sess.unlocked {
+	if !sess.unlocked && !descriptorPIN.given {
 		warnIfNoUnattendedPIN(os.Stderr)
 	}
 	sess.unlocked = true
 	return nil
-}
-
-// PromptPIN asks for the PIN on the terminal; tests replace it.
-var PromptPIN = promptPINOnTTY
-
-// readPIN finds the PIN without asking when it can: TPM2_KIRA_PIN first, then
-// the PIN file control stores, where the unattended reseal finds it, and
-// only then the terminal. source names where the PIN came from, for messages.
-func readPIN(s *YubiKeySigner) (pin, source string, err error) {
-	if pin, ok := os.LookupEnv(PINEnvVar); ok && pin != "" {
-		return pin, "the " + PINEnvVar + " environment variable", nil
-	}
-	pin, ok, err := pinFromFile()
-	if err != nil {
-		return "", "", err
-	}
-	if ok {
-		return pin, PINPath(), nil
-	}
-	pin, err = PromptPIN(s)
-	return pin, "the terminal", err
-}
-
-// pinFromFile returns the PIN the PIN file stores, if it may be used. A
-// PIN in a file that others can read, or that root does not own, is refused
-// rather than used: it has to be treated as already disclosed.
-func pinFromFile() (string, bool, error) {
-	path := PINPath()
-	pin, loose := StoredPIN(path)
-	if pin == "" {
-		return "", false, nil
-	}
-	if loose {
-		return "", false, fmt.Errorf("%s holds the YubiKey PIN but other users can read it, or root does not own it,\n"+
-			"  so tpm2-kira does not use it. Make it readable by root only:\n"+
-			"      chown root: %s && chmod 600 %s\n"+
-			"  and consider changing the PIN, since it may already have been read",
-			path, path, path)
-	}
-	return pin, true, nil
-}
-
-// warnIfNoUnattendedPIN tells the user, right after the PIN was accepted for
-// a manual seal or reseal, when the automatic reseal after an initramfs
-// rebuild will not have it. Silent when the PIN file provides the PIN.
-func warnIfNoUnattendedPIN(w io.Writer) {
-	if stored, _ := PINStored(PINPath()); stored {
-		return
-	}
-	fmt.Fprintf(w, "WARNING: there is no PIN in %s.\n", PINPath())
-	fmt.Fprintln(w, "         The automatic approval after kernel and initramfs updates will therefore")
-	fmt.Fprintln(w, "         have no PIN: it will be SKIPPED, and the next boot will show a PCR")
-	fmt.Fprintln(w, "         mismatch until you approve by hand. 'tpm2-kira control' stores the PIN")
-	fmt.Fprintln(w, "         (the signing key step), readable by root alone.")
 }
 
 // VerifyYubiKeyPIN checks pin against the token key signs with, so a PIN
@@ -805,56 +746,10 @@ func VerifyYubiKeyPIN(key crypto.Signer, pin []byte) error {
 	return nil
 }
 
-func promptPINOnTTY(s *YubiKeySigner) (string, error) {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return "", fmt.Errorf("no PIN: set %s or store it with tpm2-kira control (there is no terminal to ask on)", PINEnvVar)
-	}
-	defer tty.Close()
-	fmt.Fprintf(tty, "PIN for %s: ", s.Describe())
-	pin, err := readNoEcho(tty)
-	fmt.Fprintln(tty)
-	if err != nil {
-		return "", fmt.Errorf("reading the PIN: %w", err)
-	}
-	if pin == "" {
-		return "", errors.New("no PIN entered")
-	}
-	return pin, nil
-}
-
-func readNoEcho(tty *os.File) (string, error) {
-	fd := int(tty.Fd())
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	if err != nil {
-		return "", err
-	}
-	raw := *old
-	raw.Lflag &^= unix.ECHO
-	raw.Lflag |= unix.ICANON | unix.ISIG
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &raw); err != nil {
-		return "", err
-	}
-	defer unix.IoctlSetTermios(fd, unix.TCSETS, old)
-
-	var buf []byte
-	b := make([]byte, 1)
-	for len(buf) < 64 {
-		n, err := tty.Read(b)
-		if err != nil {
-			return "", err
-		}
-		if n == 0 || b[0] == '\n' || b[0] == '\r' {
-			break
-		}
-		buf = append(buf, b[0])
-	}
-	return string(buf), nil
-}
-
-// CloseTokenSessions resets and releases every token this process opened. The
-// reset discards the verified PIN, so no other process can sign with the key
-// after tpm2-kira exits. Safe to call when nothing was opened.
+// CloseTokenSessions resets and releases every token this process opened, and wipes
+// the PIN it held, also one --pin-fd read and nothing asked for. The reset discards
+// the verified PIN, so no other process can sign with the key after tpm2-kira exits.
+// Safe to call when nothing was opened.
 func CloseTokenSessions() {
 	for serial, sess := range tokenSessions {
 		if sess.unlocked {
@@ -864,6 +759,7 @@ func CloseTokenSessions() {
 		wipe.Bytes(sess.pin)
 		delete(tokenSessions, serial)
 	}
+	forgetDescriptorPIN()
 }
 
 // YubiKeyWantsPIN says whether signing with key, on a YubiKey, takes a PIN
@@ -875,75 +771,4 @@ func YubiKeyWantsPIN(key crypto.Signer) bool {
 		return false
 	}
 	return s.stub.PINPolicy != piv.PINPolicyNever.String()
-}
-
-// PINPath is the YubiKey's PIN, next to control.conf: the PIN alone,
-// root's and readable by root alone. It is no setting of the image, so it
-// has a file of its own: control.conf holds what the image is built with,
-// and only that.
-func PINPath() string {
-	// TPM2_KIRA_CONTROL_CONF moves control.conf for the tests, and the PIN
-	// with it.
-	conf := "/etc/tpm2-kira/control.conf"
-	if p := os.Getenv("TPM2_KIRA_CONTROL_CONF"); p != "" {
-		conf = p
-	}
-	return filepath.Join(filepath.Dir(conf), "pin")
-}
-
-// StorePIN writes the PIN, readable by root alone.
-func StorePIN(path string, pin []byte) error {
-	if bytes.IndexByte(pin, '\n') >= 0 {
-		return fmt.Errorf("the PIN cannot hold a newline")
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(pin); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.WriteString("\n"); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
-}
-
-// StoredPIN is the PIN the file at path stores: "" when there is none;
-// loose when the file is not root's, or group or others may read it - such
-// a PIN is refused, it has to be treated as already disclosed. For the
-// signer only (pinFromFile).
-func StoredPIN(path string) (pin string, loose bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		return "", false
-	}
-	data, err := io.ReadAll(io.LimitReader(f, 1<<10))
-	if err != nil {
-		return "", false
-	}
-	pin = strings.TrimRight(string(data), "\r\n")
-	if pin == "" {
-		return "", false
-	}
-	uid, owned := ownerOf(st)
-	return pin, st.Mode().Perm()&0o077 != 0 || !owned || !trustedOwner(uid)
-}
-
-// PINStored says whether the file at path stores a PIN, and whether it is
-// loose (readable by others): the PIN's value stays out of it.
-func PINStored(path string) (stored, loose bool) {
-	pin, loose := StoredPIN(path)
-	return pin != "", loose
 }

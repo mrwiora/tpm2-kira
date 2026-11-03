@@ -49,8 +49,8 @@ func TestPINFile(t *testing.T) {
 	if path != filepath.Join(dir, "pin") {
 		t.Fatalf("the PIN file is %s", path)
 	}
-	if pin, _ := signing.StoredPIN(path); pin != "" {
-		t.Fatalf("no file: %q", pin)
+	if pin, _, err := signing.StoredPIN(path); pin != nil || err != nil {
+		t.Fatalf("no file: %q %v", pin, err)
 	}
 	if err := signing.StorePIN(path, []byte("12\n34")); err == nil {
 		t.Fatal("a newline in the PIN was stored")
@@ -62,8 +62,8 @@ func TestPINFile(t *testing.T) {
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
 		t.Fatalf("the PIN file is %v", st.Mode().Perm())
 	}
-	if pin, loose := signing.StoredPIN(path); pin != "123456" || loose {
-		t.Fatalf("read back %q loose %v", pin, loose)
+	if pin, loose, err := signing.StoredPIN(path); string(pin) != "123456" || loose || err != nil {
+		t.Fatalf("read back %q loose %v: %v", pin, loose, err)
 	}
 	os.Chmod(path, 0o640)
 	if stored, loose := signing.PINStored(path); !stored || !loose {

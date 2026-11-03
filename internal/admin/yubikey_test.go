@@ -71,12 +71,12 @@ func (f *fakeTokens) install(t *testing.T) {
 	}
 	// Never touch the real terminal; tests that want a typed PIN set
 	// f.typed.
-	signing.PromptPIN = func(*signing.YubiKeySigner) (string, error) {
+	signing.PromptPIN = func(*signing.YubiKeySigner) ([]byte, error) {
 		f.prompts++
 		if f.typed == "" {
-			return "", errors.New("no PIN: no terminal in tests")
+			return nil, errors.New("no PIN: no terminal in tests")
 		}
-		return f.typed, nil
+		return []byte(f.typed), nil
 	}
 }
 
