@@ -70,7 +70,7 @@ func TestSealedMachineID(t *testing.T) {
 	}
 
 	// slot 0 deleted: the variable with it.
-	if err := NVRAMDelete(sock, machineid.Slot, false); err != nil {
+	if err := NVRAMDelete(sock, machineid.Slot, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := machineid.Load(); !os.IsNotExist(err) {

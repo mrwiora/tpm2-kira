@@ -68,14 +68,14 @@ func ReadBootSettings(tpmDev transport.TPM) (BootSettings, error) {
 }
 
 // WriteBootSettings writes the boot settings with the signing key. With
-// every switch off the index is removed: nothing left behind to explain.
+// every switch off the index is removed, whatever its shape, as a write
+// replaces it (replaceAt): nothing left behind to explain.
 func WriteBootSettings(tpmDev transport.TPM, s BootSettings, signer crypto.Signer) error {
 	if signer == nil {
 		return errors.New("the boot settings are written with the signing key")
 	}
 	if s == (BootSettings{}) {
-		_, err := RemoveIndex(tpmDev, BootSettingsIndex)
-		return err
+		return replaceAt(tpmDev, BootSettingsIndex)
 	}
 	return WriteToNVRAM(tpmDev, BootSettingsIndex, s.Marshal(), signer.Public(), signer)
 }

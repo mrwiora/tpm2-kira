@@ -25,9 +25,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/assh/hostkey"
 )
 
@@ -1634,4 +1636,40 @@ func TestBootCloseExtendsPCR15(t *testing.T) {
 	if _, stderr, err := runBoot(t, "close", "--tpm", notTPM); err == nil || !strings.Contains(stderr, "the boot is not closed") {
 		t.Fatalf("close without a TPM: %v\n%s", err, stderr)
 	}
+}
+
+// The command itself, the way a script runs it: an index of another shape at
+// a slot's generation index stays under --yes, the message naming --force, and
+// goes under --force; a slot added afterwards is one.
+func TestSlotDeleteForeignIndexByHand(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	const gen = nvslot.NVRAMSlotStart + nvslot.GenerationIndexOffset + 5
+	dev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	pub := tpm2.TPMSNVPublic{NVIndex: tpm2.TPMHandle(gen), NameAlg: tpm2.TPMAlgSHA256,
+		Attributes: tpm2.TPMANV{OwnerRead: true, AuthRead: true, PolicyWrite: true, ReadSTClear: true, NT: tpm2.TPMNTOrdinary},
+		AuthPolicy: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{7}, 32)}, DataSize: 8}
+	if _, err := (tpm2.NVDefineSpace{AuthHandle: tpm2.TPMRHOwner, PublicInfo: tpm2.New2B(pub)}).Execute(dev); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "slot", "delete", "--nvram", "5", "--yes")
+	if !strings.Contains(stderr+stdout, "--nvram 5 --force") || !strings.Contains(stdout, "read_stclear") || !tpmdev.NVRAMIndexExists(dev, gen) {
+		t.Fatalf("--yes:\n%s\n%s", stdout, stderr)
+	}
+	stdout, stderr, err = runTPMKira(t, tpmPath, "slot", "delete", "--nvram", "5", "--force")
+	if err != nil || tpmdev.NVRAMIndexExists(dev, gen) {
+		t.Fatalf("--force: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if stdout, stderr, err = runTPMKira(t, tpmPath, "slot", "add", "--nvram", "5", "--pcrs", testPCRs, "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath, "--totp"); err != nil {
+		t.Fatalf("slot add afterwards: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if nvslot.ForeignAt(dev, gen) != nil || !tpmdev.NVRAMIndexExists(dev, gen) {
+		t.Fatalf("slot add afterwards left no generation index of tpm2-kira's:\n%s\n%s", stdout, stderr)
+	}
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", "5") // the suite's variables are shared
 }

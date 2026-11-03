@@ -263,6 +263,7 @@ same way where something of it remains:
 tpm2-kira slot delete              # everything tpm2-kira keeps (slots, TPM indices, the SSH CA): asks to type 'yes'
 tpm2-kira slot delete --yes        # the same, without asking
 tpm2-kira slot delete --nvram 0    # one slot: its record and its indices in the TPM
+tpm2-kira slot delete --nvram 0 --force   # and an index of another shape at its places, without asking
 tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's, with its token
 tpm2-kira phone unenrol --nvram 0  # only the phones of one slot (needs the signing key)
 ```
@@ -312,10 +313,34 @@ What it never touches is the LUKS header: a keyslot bound to a deleted
 slot is named as dirty, and `control` (or `luks remove`) takes it.
 
 Every removal - `slot delete`, `control`'s, the SSH CA's - goes the one way
-aSSH removes what it keeps (its `persist` package): an NV index goes only
-when it has the public area tpm2-kira defines at that place, and anything
-else at a handle of tpm2-kira's range is left and named; what is not there
-is no error.
+aSSH removes what it keeps (its `persist` package): an NV index goes when it
+has the public area tpm2-kira defines at that place; what is not there is no
+error.
+
+An index of another shape at one of tpm2-kira's own places (a slot's
+generation index or record counter, the boot settings) is an earlier build's or
+another program's, and only a person can tell which. It is shown - handle,
+attributes, name algorithm, size, whether it has an auth policy - and goes on
+that person's word:
+
+- `control`, and `slot delete` at a terminal, ask, No unless said. No leaves it,
+  and the slot dirty; the rest of the slot goes.
+- `slot delete --force` removes it without asking, for scripts. `--yes` is the
+  answer to deleting everything, not to this: alone it leaves the index and the
+  error names `--force`.
+- Anywhere else in the range, and outside it, nothing removes it, `--force`
+  neither.
+
+A removal needs the owner's authorization, and tpm2-kira presents the empty one
+throughout. On a TPM whose owner has a password the removal fails and says so:
+
+```bash
+tpm2_changeauth -c owner -p PASSWORD   # the empty one again; then delete again
+```
+
+An index the platform's firmware defined at such a place cannot be removed by
+the TPM's owner at all, and a slot cannot be written there either; the error
+says so.
 
 ### If a rewrite of the slot fails
 

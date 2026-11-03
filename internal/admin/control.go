@@ -1261,9 +1261,13 @@ func (c *controller) runLuks(recipe diskkey.Recipe) error {
 // picking it removes what is left.
 func dirtyLine(d SlotContents) controlStep {
 	n := d.Slot
+	removes := "Picking the slot removes what is left of it"
+	if len(d.Foreign) > 0 {
+		removes = "Picking the slot shows the index of another shape, asks, and removes what is left of it"
+	}
 	return controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
 		Dirty: "dirty: " + d.Remains() + " left", SelfConfirm: true,
-		Explain: "Slot " + fmt.Sprint(n) + ": " + d.Cause() + ". Picking the slot removes what is left of it; then seal it again (slot add) and enrol its methods.",
+		Explain: "Slot " + fmt.Sprint(n) + ": " + d.Cause() + ". " + removes + "; then seal it again (slot add) and enrol its methods.",
 		Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
 }
 
@@ -1389,8 +1393,8 @@ func (c *controller) runRemoveSlot(slot int) error {
 	if err != nil || !ok {
 		return errors.New("not confirmed")
 	}
-	err = DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out})
-	return err
+	return DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out,
+		Foreign: foreignAsk(c.out, c.confirm)})
 }
 
 // channelStep is the red line of a slot whose phone channel is sealed to another

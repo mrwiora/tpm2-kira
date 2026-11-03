@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/mrwiora/tpm2-kira/internal/machineid"
+	"github.com/tpm2-trust/assh/persist"
 )
 
 // Deleting a slot is one act that removes everything the slot is made of:
@@ -40,6 +42,9 @@ type SlotContents struct {
 	Generation bool // its generation index
 	Counter    bool // its record counter
 	Keyslots   []SlotKeyslot
+	// Foreign are its generation index and record counter where they have
+	// another shape than tpm2-kira defines there.
+	Foreign []nvslot.Foreign
 }
 
 // Any says whether anything of the slot exists.
@@ -60,6 +65,8 @@ func (c SlotContents) Cause() string {
 	switch {
 	case !c.Dirty():
 		return ""
+	case len(c.Foreign) > 0:
+		return foreignCause(c.Foreign)
 	case c.Record && !c.Generation:
 		return "its record is left without its slot in the TPM: the TPM was cleared, or the slot removed without the record - the record's keys are the old TPM's and open nothing"
 	case !c.Record && !c.Generation && !c.Counter:
@@ -77,10 +84,10 @@ func (c SlotContents) Remains() string {
 		parts = append(parts, fmt.Sprintf("the record (EFI variable KIRAslot%d)", c.Slot))
 	}
 	if c.Generation {
-		parts = append(parts, "the generation index")
+		parts = append(parts, "the generation index"+c.shapeNote(nvslot.GenerationIndex(c.Index)))
 	}
 	if c.Counter {
-		parts = append(parts, "the record counter")
+		parts = append(parts, "the record counter"+c.shapeNote(nvslot.AttestCounterIndex(c.Index)))
 	}
 	for _, ks := range c.Keyslots {
 		parts = append(parts, fmt.Sprintf("keyslot %d of %s", ks.Keyslot, ks.Device))
@@ -91,6 +98,16 @@ func (c SlotContents) Remains() string {
 	return strings.Join(parts, ", ")
 }
 
+// shapeNote says of an index whether it is of another shape.
+func (c SlotContents) shapeNote(index uint32) string {
+	for _, f := range c.Foreign {
+		if f.Index == index {
+			return fmt.Sprintf(" (0x%08X, of another shape)", index)
+		}
+	}
+	return ""
+}
+
 // collectSlotContents looks at one slot. tpmDev may be nil: the TPM parts
 // are then reported as absent, and the caller says why the TPM is not there.
 func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot int) SlotContents {
@@ -99,6 +116,11 @@ func collectSlotContents(tpmDev transport.TPM, devices []LuksDeviceStatus, slot 
 	if tpmDev != nil {
 		c.Generation = tpmdev.NVRAMIndexExists(tpmDev, nvslot.GenerationIndex(c.Index))
 		c.Counter = tpmdev.NVRAMIndexExists(tpmDev, nvslot.AttestCounterIndex(c.Index))
+		for _, index := range []uint32{nvslot.GenerationIndex(c.Index), nvslot.AttestCounterIndex(c.Index)} {
+			if f := nvslot.ForeignAt(tpmDev, index); f != nil {
+				c.Foreign = append(c.Foreign, *f)
+			}
+		}
 	}
 	for _, d := range devices {
 		for _, ks := range d.Keyslots {
@@ -150,10 +172,17 @@ func dirtyReport(dirt []SlotContents) []DirtySlot {
 func (c SlotContents) Remedy() string {
 	var hand []string
 	if c.Record || c.Generation || c.Counter {
-		hand = append(hand, fmt.Sprintf("'tpm2-kira slot delete --nvram %d'", c.Slot))
+		force := ""
+		if len(c.Foreign) > 0 {
+			force = " --force"
+		}
+		hand = append(hand, fmt.Sprintf("'tpm2-kira slot delete --nvram %d%s'", c.Slot, force))
 	}
 	for _, ks := range c.Keyslots {
 		hand = append(hand, fmt.Sprintf("'tpm2-kira luks remove %s --keyslot %d'", ks.Device, ks.Keyslot))
+	}
+	if len(c.Foreign) > 0 {
+		return "'tpm2-kira control' (the slot's line) shows the index of another shape, asks, and removes what is left, or by hand " + strings.Join(hand, " and ")
 	}
 	return "'tpm2-kira control' (the slot's line) removes what is left, or by hand " + strings.Join(hand, " and ")
 }
@@ -185,8 +214,11 @@ type DeleteSlotOptions struct {
 	// ExistingKeyFile authorises luksKillSlot instead of the prompt for a
 	// remaining passphrase (scripts and tests).
 	ExistingKeyFile string
-	Debug           bool
-	Out             io.Writer // default stdout
+	// Foreign decides on an index of another shape at the slot's places;
+	// nil leaves it, and the error says what to do.
+	Foreign nvslot.TakeForeign
+	Debug   bool
+	Out     io.Writer // default stdout
 }
 
 // DeleteSlot removes everything of one slot. Every part is tried even when
@@ -198,6 +230,7 @@ func DeleteSlot(o DeleteSlotOptions) error {
 		out = os.Stdout
 	}
 	var failures []string
+	foreignLeft := false
 	fail := func(format string, a ...any) { failures = append(failures, fmt.Sprintf(format, a...)) }
 
 	devices, devErr := readAllLuksStatuses()
@@ -264,12 +297,13 @@ func DeleteSlot(o DeleteSlotOptions) error {
 			fmt.Fprintf(out, "the record (EFI variable KIRAslot%d) removed\n", o.Slot)
 		}
 	} else {
-		removed, err := nvslot.RemoveSlot(tpmDev, c.Index)
+		removed, err := nvslot.RemoveSlot(tpmDev, c.Index, o.Foreign)
 		for _, r := range removed {
 			fmt.Fprintf(out, "0x%08X removed: %s\n", r.Index, r.What)
 		}
 		if err != nil {
 			fail("%v", err)
+			foreignLeft = errors.Is(err, persist.ErrNotOurs)
 		} else if c.Index == machineid.Slot {
 			if err := removeMachineID(out); err != nil {
 				fail("the sealed machine-id: %v", err)
@@ -278,8 +312,11 @@ func DeleteSlot(o DeleteSlotOptions) error {
 	}
 
 	if len(failures) > 0 {
-		return fmt.Errorf("slot %d is not gone whole:\n  %s\nThe slot is dirty until a deletion removes the rest: fix the cause and delete it again (tpm2-kira control)",
-			o.Slot, strings.Join(failures, "\n  "))
+		next := "The slot is dirty until a deletion removes the rest: do what the lines above say, then pick the slot's line in 'tpm2-kira control' again."
+		if foreignLeft {
+			next = foreignRemedy(c.Index) + "\n" + next
+		}
+		return fmt.Errorf("slot %d is not gone whole:\n  %s\n%s", o.Slot, strings.Join(failures, "\n  "), next)
 	}
 	fmt.Fprintf(out, "Slot %d deleted whole.\n", o.Slot)
 	if c.Record {

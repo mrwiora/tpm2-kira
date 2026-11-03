@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/mrwiora/tpm2-kira/internal/nvslot"
 	"github.com/mrwiora/tpm2-kira/internal/phonegate"
 	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/assh/persist"
 )
 
 // NVRAMList lists all defined NVRAM indices in the TPM
@@ -135,7 +137,7 @@ func NVRAMList(tpmPath string, nvramIndex uint32, debug bool) error {
 }
 
 // NVRAMDelete deletes the specified NVRAM index
-func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
+func NVRAMDelete(tpmPath string, nvramIndex uint32, take nvslot.TakeForeign, debug bool) error {
 	if err := nvslot.ValidateNVRAMIndex(nvramIndex); err != nil {
 		return fmt.Errorf("invalid NVRAM index: %w", err)
 	}
@@ -149,12 +151,13 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	// generation index and record counter. Without its counter no record of
 	// the slot is accepted by the gate again, and a new counter starts above
 	// every value this one had. A companion index named by itself goes
-	// alone. Only what has tpm2-kira's shape is taken.
+	// alone. What has tpm2-kira's shape is taken; another shape at its own
+	// places on take's word.
 	var removed []nvslot.Removed
 	if nvslot.ValidateBlobIndex(nvramIndex) == nil && nvramIndex != nvslot.BootSettingsIndex {
-		removed, err = nvslot.RemoveSlot(tpmDev, nvramIndex)
+		removed, err = nvslot.RemoveSlot(tpmDev, nvramIndex, take)
 	} else {
-		ok, rerr := nvslot.RemoveIndex(tpmDev, nvramIndex)
+		ok, rerr := nvslot.RemoveIndex(tpmDev, nvramIndex, take)
 		if ok {
 			what := kiraIndexRole(nvramIndex)
 			if what == "" {
@@ -174,6 +177,9 @@ func NVRAMDelete(tpmPath string, nvramIndex uint32, debug bool) error {
 	// The sealed machine-id goes with slot 0: its policy is the slot's.
 	if nvramIndex == machineid.Slot && err == nil {
 		err = removeMachineID(os.Stdout)
+	}
+	if errors.Is(err, persist.ErrNotOurs) {
+		return fmt.Errorf("%w\n%s", err, foreignRemedy(nvramIndex))
 	}
 	if err != nil {
 		return err
@@ -225,9 +231,12 @@ func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 // blob holds the TOTP key and the phone enrolment, and its generation index
 // and record counter go with it. With an index that slot is deleted;
 // without one, every slot and whatever an interrupted command left behind.
-func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool) error {
+// An index of another shape at tpm2-kira's own places is shown; force removes
+// it, a terminal asks, and yes alone (the whole of it asked for, not this)
+// leaves it.
+func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug bool) error {
 	if nvramIndex != 0 {
-		if err := NVRAMDelete(tpmPath, nvramIndex, debug); err != nil {
+		if err := NVRAMDelete(tpmPath, nvramIndex, slotDeleteForeign(os.Stdout, yes, force), debug); err != nil {
 			return err
 		}
 		// What outlives the blob by design of this command - a LUKS keyslot
@@ -302,12 +311,15 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	}
 	fmt.Println()
 
+	take := slotDeleteForeign(os.Stdout, yes, force)
+	foreignLeft := false
 	failed := 0
 	for _, slotIdx := range slots {
 		fmt.Printf("Deleting slot #%d (0x%08X)... ", nvslot.SlotNumber(slotIdx), slotIdx)
-		if err := NVRAMDelete(tpmPath, slotIdx, debug); err != nil {
+		if err := NVRAMDelete(tpmPath, slotIdx, take, debug); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
 			failed++
+			foreignLeft = foreignLeft || errors.Is(err, persist.ErrNotOurs)
 		}
 	}
 	if len(leftovers) > 0 {
@@ -320,9 +332,10 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 				continue // went with its slot
 			}
 			fmt.Printf("Deleting leftover 0x%08X... ", idx)
-			if _, err := nvslot.RemoveIndex(tpmDev, idx); err != nil {
+			if _, err := nvslot.RemoveIndex(tpmDev, idx, take); err != nil {
 				fmt.Printf("FAILED: %v\n", err)
 				failed++
+				foreignLeft = foreignLeft || errors.Is(err, persist.ErrNotOurs)
 				continue
 			}
 			fmt.Println("done")
@@ -350,6 +363,9 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes bool, debug bool)
 	}
 
 	fmt.Println()
+	if foreignLeft {
+		return fmt.Errorf("%d of %d item(s) failed to delete. An index of another shape stays until a person says so: 'tpm2-kira slot delete' at a terminal shows it and asks; 'tpm2-kira slot delete --yes --force' removes it without asking", failed, total)
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d item(s) failed to delete", failed, total)
 	}

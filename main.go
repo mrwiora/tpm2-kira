@@ -562,7 +562,8 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
 	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram)")
+	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram); an index of another shape stays")
+	force := fs.Bool("force", false, "delete: remove an index of another shape at tpm2-kira's own places, shown and not asked about")
 
 	fs.Parse(args)
 
@@ -581,7 +582,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := admin.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *debug); err != nil {
+		if err := admin.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *force, *debug); err != nil {
 			fail(err)
 		}
 	default:

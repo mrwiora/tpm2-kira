@@ -232,10 +232,13 @@ It may not carry what came before.
     owns (the workspace's AGENTS.md), never aSSH's.
 
   For NV indices: no NVUndefineSpace of tpm2-kira's own.
-  `nvslot.RemoveIndex` / `RemoveSlot` take an index only when it has the
-  public area tpm2-kira defines at that place (anything else at a handle of
-  its range is left and named), absent is no error, and a write at one of
-  its own handles replaces what is there (`replaceAt`). Whatever tpm2-kira
+  `nvslot.RemoveIndex` / `RemoveSlot` take an index when it has the public
+  area tpm2-kira defines at that place, or, at one of its own places
+  (`OwnPlace`), when a person saw another one and said so (`TakeForeign`:
+  `control` and a terminal ask, `slot delete --force` says it; `--yes` alone
+  does not; `persist.Any`). Anything else at a handle of its range is left and
+  named, absent is no error, and a write at one of its own handles replaces
+  what is there (`replaceAt`). Whatever tpm2-kira
   creates it can remove: `slot delete` without `--nvram` takes every slot,
   the leftovers, the boot settings, the sealed machine-id and the SSH CA
   (the machine-id goes with slot 0 too); `control` asks before it

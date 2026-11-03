@@ -1187,8 +1187,9 @@ What this means in practice:
    boot and the fallbacks unlock: the password and salt typed (recipe
    0x1100), then the operating system's recovery passphrase. `status` and
    `control` name what is left of the slot, and why, and remove it.
-   tpm2-kira itself removes an index only when it has the public area
-   tpm2-kira defines at that place (aSSH's `persist`, `nvslot.RemoveIndex`).
+   tpm2-kira itself removes an index when it has the public area tpm2-kira
+   defines at that place, or, at one of its own places, when root saw another
+   one and said so (aSSH's `persist`, `nvslot.RemoveIndex`).
 4. **The real access control is on the key objects**, not on where the
    record is stored: their `authPolicy` (PolicyAuthorize, §4) is what
    prevents unauthorised use, and its PolicyPCR(15 == zero) fails after the

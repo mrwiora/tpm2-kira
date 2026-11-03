@@ -396,8 +396,12 @@ index and record counter (0x01803010-0x0180301F are the slots' numbers).
                    settings, the sealed machine-id (KIRAmachineID) and the
                    SSH CA (its EFI variable and /etc/tpm2-kira/ssh_ca.pub) -
                    after asking on a terminal,
-                   or with --yes. Only an index with tpm2-kira's shape is
-                   taken; anything else at its handles is left and named.
+                   or with --yes. An index with tpm2-kira's shape is taken.
+                   One of another shape at its own places (the generation
+                   index, the record counter, the boot settings) is shown:
+                   a terminal asks, No unless said; --force removes it
+                   without asking; --yes alone leaves it and names --force.
+                   Anywhere else nothing removes it.
                    A LUKS keyslot bound to the slot stays and leaves the
                    slot dirty; 'tpm2-kira control' (the slot's line)
                    deletes a slot whole
