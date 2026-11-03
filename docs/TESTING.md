@@ -11,23 +11,23 @@ Four depths. Each says what it can show; only the third and the fourth end a bat
 | **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `silent-tpm`, and then, back at `fresh` with Secure Boot really on, `secure-boot`, `tpm-salt`, `vault-pepper`, `revoked`, `firmware-refuses`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | 15-20 min, an orientation; see below | yes, once per batch |
 | **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
 
-Measured seconds, in the full run (`.local/runs/m/proof`, 934 s; `make test-all` 197 s and
-safearch's `tests/run.sh` 127 s started at 201 s, when the setups were done) and each scenario alone from
+Measured seconds, in the full run (`.local/runs/t/proof`, 935 s; `make test-all` 166 s and
+safearch's `tests/run.sh` 132 s started at 192 s, when the setups were done) and each scenario alone from
 a saved setup (`.local/runs/m/`), Arch / Debian. The second setup, with Secure Boot on, adds about 4 minutes:
 
 | Scenario | In the full run | Alone | Budget, for information |
 |---|---|---|---|
-| `setup` | 174 / 201 | 132 / 144 (`--fast-kdf`) | 175 / 202 |
-| `typed-boot` | 48 / 66 | 35 / 41 (`--fast-kdf`) | 49 / 67 |
-| `hibernate` | 67 / 6 | 53 / - (`--fast-kdf`) | 68 / 7 |
-| `unapproved` | 74 / - | 71 / - | 75 / - |
-| `silent-tpm` | 122 / 123 | 111 / - (`--fast-kdf`) | 124 / 124 |
-| `secure-boot` | 214 / 255 | 236 / 264 (`--fast-kdf`, a package build in it); from its saved setup 52 / 60 | 218 / 258 |
-| `tpm-salt` | 31 / 29 | 16 / 15 (`--fast-kdf`) | 32 / 30 |
-| `vault-pepper` | 131 / 157 | 102 / 108 (`--fast-kdf`) | 133 / 158 |
-| `revoked` | 59 / 65 | 51 / 54 (`--fast-kdf`) | 60 / 66 |
-| `firmware-refuses` | 11 / 9 | 12 / 9 (`--fast-kdf`) | 12 / 10 |
-| the machine | 931 / 912 | | 946 / 922 |
+| `setup` | 169 / 192 | 132 / 144 (`--fast-kdf`) | 175 / 202 |
+| `typed-boot` | 50 / 56 | 35 / 41 (`--fast-kdf`) | 49 / 67 |
+| `hibernate` | 68 / 7 | 53 / - (`--fast-kdf`) | 68 / 7 |
+| `unapproved` | 73 / - | 71 / - | 75 / - |
+| `silent-tpm` | 121 / 121 | 111 / - (`--fast-kdf`) | 124 / 124 |
+| `secure-boot` | 220 / 256 | 236 / 264 (`--fast-kdf`, a package build in it); from its saved setup 52 / 60 | 218 / 258 |
+| `tpm-salt` | 25 / 28 | 16 / 15 (`--fast-kdf`) | 32 / 30 |
+| `vault-pepper` | 137 / 156 | 102 / 108 (`--fast-kdf`) | 133 / 158 |
+| `revoked` | 60 / 64 | 51 / 54 (`--fast-kdf`) | 60 / 66 |
+| `firmware-refuses` | 12 / 9 | 12 / 9 (`--fast-kdf`) | 12 / 10 |
+| the machine | 935 / 889 | | 946 / 922 |
 
 After which change: `tools/test-affected.py` prints it, from the table in the workspace's AGENTS.md,
 "What to test after a change". In short: installed-system code, the fast depth; the boot, the close or
