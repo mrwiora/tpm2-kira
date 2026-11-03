@@ -24,6 +24,15 @@ func ev(pcr int, typ uint32, data []byte) evlog.Event {
 	return evlog.Event{Index: pcr, Type: evlog.EventType(typ), Data: data}
 }
 
+// EV_NO_ACTION extends nothing, so its digest is not what a verifier replays.
+func TestChainLeavesNoActionOut(t *testing.T) {
+	a, zero, b := ev(7, 0x80000001, nil), ev(7, evNoAction, nil), ev(7, 0x4, nil)
+	a.Digest, zero.Digest, b.Digest = []byte{1}, []byte{0}, []byte{2}
+	if got := chainOf([]evlog.Event{a, zero, b, ev(8, 0x4, nil)}, 7, 16); !slices.Equal(got, []byte{1, 2}) {
+		t.Errorf("the chain: %v", got)
+	}
+}
+
 func TestInitrdCoverageByBootPath(t *testing.T) {
 	efiApp := ev(4, evEFIBootServicesApplication, []byte{1, 2, 3})
 	cases := []struct {

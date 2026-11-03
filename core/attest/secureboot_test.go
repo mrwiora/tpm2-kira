@@ -2,6 +2,7 @@ package attest_test
 
 import (
 	"crypto/sha256"
+	"strings"
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
@@ -88,6 +89,48 @@ func TestEstablishSecureBootNotEstablished(t *testing.T) {
 		if got.State != attest.SecureBootNotEstablished || got.Detail == "" || !got.Red() {
 			t.Errorf("%s: %+v", name, got)
 		}
+	}
+}
+
+// The firmware's own word takes on away, and only before its separator: what comes after
+// it is anyone's. Off and Setup Mode stay what they are.
+func TestEstablishSecureBootFirmwareTakesOnAway(t *testing.T) {
+	alg := attest.AlgSHA256
+	debug := sha256.Sum256([]byte("UEFI Debug Mode"))
+	errSep := sha256.Sum256([]byte{0xff, 0xff, 0xff, 0xff})
+	state := func(chain []byte) attest.SecureBootFinding {
+		return attest.EstablishSecureBoot(alg, attesttest.ReplayChain(alg, chain), chain)
+	}
+	withDebug := func(s string) []byte {
+		return append(append([]byte(nil), debug[:]...), attesttest.SecureBootChain(alg, s)...)
+	}
+	withErrSep := func(s string) []byte {
+		c := attesttest.SecureBootChain(alg, s)
+		return append(append([]byte(nil), c[:len(c)-sha256.Size]...), errSep[:]...)
+	}
+	for name, c := range map[string]struct {
+		chain []byte
+		want  string
+	}{
+		"debug mode, on":            {withDebug(attest.SecureBootOn), attest.SecureBootNotEstablished},
+		"debug mode, off":           {withDebug(attest.SecureBootOff), attest.SecureBootOff},
+		"debug mode, setup mode":    {withDebug(attest.SecureBootSetupMode), attest.SecureBootSetupMode},
+		"error separator, on":       {withErrSep(attest.SecureBootOn), attest.SecureBootNotEstablished},
+		"error separator, off":      {withErrSep(attest.SecureBootOff), attest.SecureBootOff},
+		"error separator, setup":    {withErrSep(attest.SecureBootSetupMode), attest.SecureBootSetupMode},
+		"debug mode after the part": {append(attesttest.SecureBootChain(alg, attest.SecureBootOn), debug[:]...), attest.SecureBootOn},
+		"error value after the part": {append(attesttest.SecureBootChain(alg, attest.SecureBootOn), errSep[:]...),
+			attest.SecureBootOn},
+	} {
+		if got := state(c.chain); got.State != c.want {
+			t.Errorf("%s: %+v, want %s", name, got, c.want)
+		}
+	}
+	if got := state(withDebug(attest.SecureBootOn)); !strings.Contains(got.Detail, "UEFI Debug Mode") {
+		t.Errorf("not named: %+v", got)
+	}
+	if got := state(withErrSep(attest.SecureBootOn)); !strings.Contains(got.Detail, "error separator") {
+		t.Errorf("not named: %+v", got)
 	}
 }
 

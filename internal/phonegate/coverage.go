@@ -120,10 +120,12 @@ func logEvents(path string, alg uint16) []evlog.Event {
 	return log.Events(hash)
 }
 
+// chainOf is the digests of what went into pcr. EV_NO_ACTION extends nothing: its digest
+// in the chain could not replay to the register.
 func chainOf(events []evlog.Event, pcr, most int) []byte {
 	var chain []byte
 	for _, e := range events {
-		if e.Index == pcr {
+		if e.Index == pcr && uint32(e.Type) != evNoAction {
 			chain = append(chain, e.Digest...)
 		}
 	}
@@ -139,6 +141,9 @@ func chainOf(events []evlog.Event, pcr, most int) []byte {
 func PCR7Chain(path string, alg uint16) []byte {
 	return chainOf(logEvents(path, alg), 7, attest.MaxPCR7Chain)
 }
+
+// evNoAction is EV_NO_ACTION.
+const evNoAction = 0x00000003
 
 // grubCommand is how GRUB describes a command it measures into PCR 8; the digest is of
 // what follows.

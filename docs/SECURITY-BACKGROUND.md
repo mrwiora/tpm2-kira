@@ -1538,7 +1538,25 @@ the digests of PCR 7's events the machine sends (the event log's, `pcr7_chain`),
    PK is what that state is); `SecureBoot` = 1 is `on`; 0 or absent is `off`.
    Anything else - no log, PCR 7 not in the selection, a chain that does not replay, no
    separator, no such event or two, firmware that hashes the variable otherwise - is
-   `not_established`.
+   `not_established`. So is `SecureBoot` = 1 with the action `UEFI Debug Mode` before the
+   separator (a debugger goes round every signature check) or with a separator of the error
+   value (firmware that says its measurements went wrong): the digest of each is known, and
+   go-attestation refuses both.
+
+**What one log of digests cannot show.** That a key verified anything: an
+`EV_EFI_VARIABLE_AUTHORITY` digest is of a certificate no verifier here holds, and a firmware
+measures a certificate once, so that none follows the separator proves nothing.
+go-attestation, which has the log's data, refuses `on` without one; core reads `on`
+(`TestFirmwareOddityIsNotOn` holds it). A firmware's oddity stays refused and is not read
+around: a digest over the variable's data alone, not `UEFI_VARIABLE_DATA`, is
+`not_established`, as for go-attestation, and that machine gets no release from a vault. No log
+we have shows such a firmware.
+
+**Against other firmware.** `TestCoreAgainstGoAttestationLogs` reads go-attestation's test
+logs from the module go.mod requires (real logs, not copied; 7 logs and one dump, 3 of them
+`on`, all of them with `SecureBoot` measured as the structure): the state agrees wherever both
+say one. They differ where a log gives no state to read: a `SecureBoot` of length 0 is `off`
+here and an error there, a log with nothing in PCR 7 not established here and disabled there.
 
 Event types are in no signature and are not read. Whatever the machine does after the
 firmware's separator it cannot place an event before it. A machine that shows another

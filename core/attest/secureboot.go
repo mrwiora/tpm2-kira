@@ -26,6 +26,19 @@ import (
 // loader, the system, a root user) can extend PCR 7 but cannot place an event before
 // it. What the state rests on is the firmware that measured it, PCR 0's business:
 // firmware that lies measures what it likes.
+//
+// On takes more than SecureBoot = 1. Two things the firmware says of its own part take
+// it away, as go-attestation's ParseSecurebootState does too: the action "UEFI Debug
+// Mode", a debugger that can go round any signature check, and a separator of the error
+// value, firmware that says its measurements went wrong. Off and Setup Mode stay as they
+// are then: they are red anyway, and say more.
+//
+// What a chain of digests cannot show, and on does not check: that a key was used
+// (EV_EFI_VARIABLE_AUTHORITY has a digest of what the firmware's db holds, which no
+// verifier knows here, and a firmware measures one certificate once, so none after the
+// separator proves nothing), and that KEK and db hold anything. A firmware's digest over
+// the variable's data alone, not UEFI_VARIABLE_DATA, is no event of any state: it stays
+// not established, as for go-attestation (docs/SECURITY-BACKGROUND.md, §13.5).
 
 // SecureBootFinding is what a verifier established, for people: State is one of the
 // states below; Detail says why, for a state not established.
@@ -110,13 +123,18 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 	separator, errorSeparator := sum([]byte{0, 0, 0, 0}), sum([]byte{0xff, 0xff, 0xff, 0xff})
 	on, off, absent := sum(UEFIVariableData("SecureBoot", []byte{1})), sum(UEFIVariableData("SecureBoot", []byte{0})), sum(UEFIVariableData("SecureBoot", nil))
 	noPK := sum(UEFIVariableData("PK", nil))
-	var sawOn, sawOff, sawNoPK, sawSeparator bool
+	debugMode := sum([]byte("UEFI Debug Mode"))
+	var sawOn, sawOff, sawNoPK, sawSeparator, sawDebugMode, sawErrorSeparator bool
 	states := 0
 	for o := 0; o < len(chain) && !sawSeparator; o += size {
 		e := chain[o : o+size]
 		switch {
-		case bytes.Equal(e, separator), bytes.Equal(e, errorSeparator):
+		case bytes.Equal(e, separator):
 			sawSeparator = true
+		case bytes.Equal(e, errorSeparator):
+			sawSeparator, sawErrorSeparator = true, true
+		case bytes.Equal(e, debugMode):
+			sawDebugMode = true
 		case bytes.Equal(e, on):
 			sawOn = true
 			states++
@@ -136,6 +154,10 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 		return notEstablished("the firmware's events of PCR 7 name the SecureBoot variable more than once")
 	case sawNoPK:
 		return SecureBootFinding{State: SecureBootSetupMode}
+	case sawOn && sawDebugMode:
+		return notEstablished("SecureBoot = 1, and the firmware measured UEFI Debug Mode: a debugger was there at this boot")
+	case sawOn && sawErrorSeparator:
+		return notEstablished("SecureBoot = 1, and the firmware ended its part with the error separator")
 	case sawOn:
 		return SecureBootFinding{State: SecureBootOn}
 	case sawOff:
