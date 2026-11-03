@@ -366,6 +366,10 @@ func TestMain(m *testing.M) {
 	if os.Getenv("PROMPT_TEST_HELPER") == "" {
 		os.Exit(m.Run())
 	}
+	if os.Getenv("PROMPT_TEST_HELPER") == "menu" {
+		Select(New(os.Stdin, os.Stdout), "Title", "The question", helperEntries, "a")
+		os.Exit(0)
+	}
 	var out bytes.Buffer
 	p := New(os.Stdin, &out)
 	p.Password("PIN", "", nil)

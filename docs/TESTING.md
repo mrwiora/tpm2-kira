@@ -97,7 +97,7 @@ is this, from `fresh`, without `--fast-kdf`: there is no flag for that.
 
 | Scenario (`vmtest.py --only NAME`) | What it shows | Budget Arch / Debian, s, for information |
 |---|---|---|
-| `setup` | install, setup, enrolment, `control`, the memory lock of a command, a hook under a refused lock, the note on a vault's keyslot | 175 / 202 |
+| `setup` | install, setup, enrolment, `control` (answered by number, and once by the arrow keys on a terminal with a size), the memory lock of a command, a hook under a refused lock, the note on a vault's keyslot | 175 / 202 |
 | `typed-boot` | the typed boot over SSH, every running-system check in one go: certified key, TOTP, PCR 15 closed, slots refuse, PCR 4, Secure Boot's warning, memory locked, signed slots on Arch, 8 and 9 on Debian, the close before a volume (Arch a volume's unit in the journal, Debian the first key request in the boot's log) | 49 / 67 |
 | `hibernate` | Arch: hibernate and resume; both: the image's close before a resume, suspend; a kernel that refuses the image is "not tested", at once | 68 / 7 |
 | `unapproved` | an image not approved, signed by the PCR key (Arch) | 75 / - |

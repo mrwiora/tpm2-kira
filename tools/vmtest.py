@@ -47,6 +47,7 @@ import urllib.parse
 import base64
 import configparser
 import datetime
+import fcntl
 import glob
 import hashlib
 import hmac
@@ -61,6 +62,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
 
@@ -373,7 +375,7 @@ class Session:
     ("[Enter: OK]": for a person to read what the step printed), are answered
     by themselves; every other prompt is the test's to answer."""
 
-    def __init__(self, argv, log_path, password=None):
+    def __init__(self, argv, log_path, password=None, size=None):
         self.password = password
         self.log = open(log_path, "ab", buffering=0)
         self.buf = b""
@@ -382,6 +384,10 @@ class Session:
         self.closed = False
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
+            if size:
+                # A terminal that says its size and has a TERM: where a menu takes the keys.
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[0], size[1], 0, 0))
+                os.environ["TERM"] = "xterm"
             os.execvp(argv[0], argv)
 
     def _pump(self, timeout):
@@ -688,12 +694,12 @@ class Machine:
         red = re.search(rb"\x1b\[0;31m[^\n]*" + re.escape(want.split(" (risk")[0].encode()), session.buf) is not None
         self.check(f"{where} judges Secure Boot's state, in red: {want!r}", want in flat and red, flat[-800:])
 
-    def session(self, remote_cmd, name):
+    def session(self, remote_cmd, name, size=None):
         self.sessions += 1
         argv = ["ssh", "-tt", "-p", str(self.ssh_port), "-o", "StrictHostKeyChecking=accept-new", "-o", "PubkeyAuthentication=no",
                 "-o", "PreferredAuthentications=password,keyboard-interactive",
                 f"{self.user}@{self.host}", remote_cmd]
-        return Session(argv, os.path.join(self.dir, f"session-{self.sessions:02d}-{name}.log"), self.password)
+        return Session(argv, os.path.join(self.dir, f"session-{self.sessions:02d}-{name}.log"), self.password, size)
 
     def boot_session(self, n):
         argv = ["ssh", "-tt", "-p", str(self.boot_port), "-i", os.path.join(self.dir, "bootkey"),
@@ -1052,6 +1058,30 @@ class Machine:
                        "approved the boot state" in out or "approval completed successfully" in out, out[-800:])
         except Fail as e:
             self.check("control, answered line by line", False, str(e))
+            raise
+        finally:
+            s.close()
+
+    def control_keys(self):
+        """control on a real terminal of 24 rows and 40 columns: its menu by the arrow keys,
+        drawn and left in place over ssh, and the terminal given back. The session of
+        control() has no size, and so the numbered prompt."""
+        self.head("control's menu by the arrow keys")
+        s = self.session("sudo tpm2-kira control; stty -a", "control-keys", size=(24, 40))
+        menu = r"Enter a number between 1 and \d+: ?$"
+        try:
+            s.expect(menu, 120)
+            s.send("\x1b[B"); s.expect(menu, 10)
+            s.send("\x1b[A"); s.expect(menu, 10)
+            raw = s.buf
+            self.check("control: on a terminal with a size the menu is drawn with the cursor", b"\x1b[7m" in raw and b"\x1b[J" in raw, repr(raw[-400:]))
+            s.send("\r")
+            out = s.wait_end(60)
+            self.log.save("control-keys.log", out)
+            self.check("control: Enter takes the entry under the cursor, the default, and the answer stays", re.search(r"^> \d+\.\s+Quit", out, re.M) is not None, out[-600:])
+            self.check("control: the terminal is given back after the menu", re.search(r"(?<![-\w])icanon\b", out) is not None and re.search(r"(?<![-\w])echo\b", out) is not None, out[-600:])
+        except Fail as e:
+            self.check("control's menu by the arrow keys", False, str(e))
             raise
         finally:
             s.close()
@@ -1855,6 +1885,7 @@ class Machine:
             if self.hib:
                 self.hib.prepare()
         self.control()
+        self.control_keys()
         self.image()
 
     def secure_boot_setup(self):
