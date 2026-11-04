@@ -1714,7 +1714,7 @@ class Machine:
         self.vault_leave(vault)
         name = self.name + "-keyboard"
         url, pin, token = self.vault_token(vault, name)
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --keyboard --url {url} --pin {pin} --token {token} --ca {self.CA_FILE}", "luks-enrol-vault-keyboard")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --keyboard --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {name}", "luks-enrol-vault-keyboard")
         try:
             s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
             s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
