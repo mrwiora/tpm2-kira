@@ -397,30 +397,22 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 15 | factor_credential | bytes ≤1024 | O | a wrapped factor the phone is asked to keep (`factor enrol` on the booted system; never at boot): `TPM2_MakeCredential` credentialBlob for the machine's EK and release key. Kept, replacing any kept one, when the verdict is accepted (not on reject); returned in a Release after the accepted receipt of this and every later session |
 | 16 | factor_secret | bytes ≤1024 | O | with 15: `TPM2_MakeCredential` secret |
 | 17 | factor_label | string ≤64 | O | with 15: the factor's label, default `luks` |
-| 18 | sb_quoted | bytes | O | beside a selection on the SHA-1 bank: a quote of `sha256:7` under the same `qd` (below) |
-| 19 | sb_signature | bytes | O | with 18: its signature by the attestation key |
-| 20 | sb_pcr7 | bytes[32] exact | O | with 18: PCR 7's SHA-256 value |
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `pcr7_chain` bytes ≤16384 O ·
-5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64 ·
-7 `pcr7_chain_sha256` bytes ≤16384 O. Not TPM-signed.
+5 `seal_pcr_selection` bytes ≤24 · 6 `uptime_ms` u64. Not TPM-signed.
 
 `pcr7_chain` is the digests of PCR 7's events in the machine's event log, in the
 quote's bank, concatenated in the log's order. The phone believes them only as far as
 they replay to the quoted PCR 7, and reads Secure Boot's state from them with its own
 hashes of `UEFI_VARIABLE_DATA` (`attest.EstablishSecureBoot`,
 docs/SECURITY-BACKGROUND.md §13.5); anything else the machine could say of the state is
-not on the wire. The same field is in the EnrolOffer's `boot_context`.
+not on the wire. The same field is in the EnrolOffer's `boot_context`. A running system's
+PCR 7 is past systemd's `os-separator`, which is in no firmware's log: the digests replay to
+the quoted value, or to it after exactly that one constant.
 
-A firmware's log can hold SHA-256 digests alone, so a selection on the SHA-1 bank may have
-no events to replay. Beside one the machine also quotes `sha256:7` under the same qualifying
-data (fields 18-20; in the EnrolOffer 27-29) and sends `pcr7_chain_sha256`, and the phone reads
-the state from that: the attestation key's signature, the qualifying data, exactly `sha256:7`,
-the value reproducing the digest (`attest.EstablishSecureBootOf`). A second quote that does not
-verify is not established, with no going back to the SHA-1 events. No second quote, on a TPM
-with no SHA-256 bank: the SHA-1 events. The verdict and the enrolment event carry `sha1_bank`,
-a warning that decides nothing.
+The verdict and the enrolment event carry `sha1_bank` when the selection is on the SHA-1
+bank: a warning beside the state, that decides nothing.
 
 #### 7.3.4 EventlogRequest (0x04)
 

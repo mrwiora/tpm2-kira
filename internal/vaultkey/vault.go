@@ -362,9 +362,7 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 	}
 	sel := SealedSelection(vs.Sealed)
 	be := &phonegate.TPMBackend{TPM: tpmDev, Blob: vs.Att}
-	qd := vaultproto.QualifyingData(id, ch.RequestID, ch.Nonce)
-	attestSel := attest.PCRSelection{Alg: sel.Alg, Indices: sel.Indices}
-	q, err := be.Quote(qd, attestSel)
+	q, err := be.Quote(vaultproto.QualifyingData(id, ch.RequestID, ch.Nonce), attest.PCRSelection{Alg: sel.Alg, Indices: sel.Indices})
 	if err != nil {
 		return nil, err
 	}
@@ -377,10 +375,6 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 		Generation:        p.Generation,
 		ApprovalSignature: p.ApprovalSignature,
 		PCR7Chain:         phonegate.PCR7Chain(measure.DefaultEventlogPath, sel.Alg),
-		SecureBootQuote:   attest.QuoteSecureBoot(be.Quote, qd, attestSel),
-	}
-	if req.SecureBootQuote != nil {
-		req.PCR7ChainSHA256 = phonegate.PCR7Chain(measure.DefaultEventlogPath, attest.AlgSHA256)
 	}
 	for _, v := range q.Values {
 		req.PCRValues = append(req.PCRValues, vaultproto.PCRValue{Index: v.Index, Value: v.Digest})

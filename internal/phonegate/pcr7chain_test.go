@@ -2,8 +2,11 @@ package phonegate
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mrwiora/tpm2-kira/core/attest"
@@ -78,5 +81,26 @@ func TestInitrdEventsOfRealLogs(t *testing.T) {
 	}
 	if ev := InitrdEventsOf("no such file", attest.AlgSHA256); ev.PCR8Chain != nil || ev.PCR11Chain != nil || ev.Command != "" {
 		t.Errorf("no log: %+v", ev)
+	}
+}
+
+// A real machine's log, kept off the repository because it names the machine's firmware:
+// KIRA_LOCAL_EVENTLOG is the absolute path of a directory with its "eventlog" and "pcr7-sha1", the register on the
+// running system in hex (tpm2-trust's .local/eventlogs/). Skipped without it.
+func TestLocalMachineLogPastTheOSSeparator(t *testing.T) {
+	dir := os.Getenv("KIRA_LOCAL_EVENTLOG")
+	if dir == "" {
+		t.Skip("KIRA_LOCAL_EVENTLOG is not set")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "pcr7-sha1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcr7, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := attest.EstablishSecureBoot(attest.AlgSHA1, pcr7, PCR7Chain(filepath.Join(dir, "eventlog"), attest.AlgSHA1)); got.State != attest.SecureBootOn {
+		t.Fatalf("%+v", got)
 	}
 }

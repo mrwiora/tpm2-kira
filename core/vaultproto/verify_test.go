@@ -272,29 +272,36 @@ func TestVerifyReleaseSignedPCR(t *testing.T) {
 	}
 }
 
-// A slot on the SHA-1 bank: the vault reads the state from the second quote, and a machine
-// leaving it out, with SHA-256 events alone, gets no "on".
-func TestReleaseOnSHA1EstablishesFromTheSecondQuote(t *testing.T) {
-	m := newMachine(t)
-	m.dev.Selection = Selection{Alg: uint16(tpm2.TPMAlgSHA1), Indices: []uint8{0, 7, 11}}
-	m.tpm.SetSecureBootBothBanks(attest.SecureBootOn, false)
-	id, nonce := "request", bytes.Repeat([]byte{2}, NonceSize)
-	sel := attest.PCRSelection{Alg: m.dev.Selection.Alg, Indices: m.dev.Selection.Indices}
-	req := m.request(t, id, nonce)
-	req.SecureBootQuote = attest.QuoteSecureBoot(m.tpm.Quote, QualifyingData(m.dev.DeviceID, id, nonce), sel)
-	req.PCR7ChainSHA256 = m.tpm.PCR7ChainSHA256
-	checked, _ := VerifyRelease(m.dev, nonce, req, 0)
-	if checked == nil || checked.SecureBoot.State != attest.SecureBootOn {
-		t.Fatalf("%+v", checked)
-	}
-	req.SecureBootQuote = nil
-	checked, _ = VerifyRelease(m.dev, nonce, req, 0)
-	if checked == nil || checked.SecureBoot.State != attest.SecureBootNotEstablished {
-		t.Fatalf("%+v", checked)
-	}
-	req.SecureBootQuote = attest.QuoteSecureBoot(m.tpm.Quote, QualifyingData(m.dev.DeviceID, "another", nonce), sel)
-	checked, _ = VerifyRelease(m.dev, nonce, req, 0)
-	if checked == nil || checked.SecureBoot.State != attest.SecureBootNotEstablished {
-		t.Fatalf("%+v", checked)
+// The vault's check is the shared one: a register past systemd's OS separator, on either bank,
+// establishes the state its events say, and an unlogged extend beyond that one establishes nothing.
+func TestReleaseEstablishesPastTheOSSeparator(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		alg  uint16
+		boot func(s *attesttest.SoftTPM)
+	}{
+		{"SHA-256", attest.AlgSHA256, func(s *attesttest.SoftTPM) { s.SetSecureBoot(attest.SecureBootOn) }},
+		{"SHA-1", attest.AlgSHA1, func(s *attesttest.SoftTPM) { s.SetSecureBootSHA1(attest.SecureBootOn) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMachine(t)
+			m.dev.Selection = Selection{Alg: tc.alg, Indices: []uint8{0, 7, 11}}
+			tc.boot(m.tpm)
+			m.tpm.PassOSSeparator(tc.alg)
+			id, nonce := "request", bytes.Repeat([]byte{2}, NonceSize)
+			req := m.request(t, id, nonce)
+			req.PCR7Chain = m.tpm.PCR7Chain
+			checked, _ := VerifyRelease(m.dev, nonce, req, 0)
+			if checked == nil || checked.SecureBoot.State != attest.SecureBootOn {
+				t.Fatalf("%+v", checked)
+			}
+			m.tpm.PassOSSeparator(tc.alg)
+			req = m.request(t, id, nonce)
+			req.PCR7Chain = m.tpm.PCR7Chain
+			checked, _ = VerifyRelease(m.dev, nonce, req, 0)
+			if checked == nil || checked.SecureBoot.State != attest.SecureBootNotEstablished {
+				t.Fatalf("two separators: %+v", checked)
+			}
+		})
 	}
 }

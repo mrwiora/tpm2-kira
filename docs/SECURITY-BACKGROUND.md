@@ -1531,7 +1531,11 @@ enrolment and at every boot, on the phone (`Verify`) and at the vault
 (`VerifyRelease`), `attest.EstablishSecureBoot` takes the PCR 7 of a verified quote and
 the digests of PCR 7's events the machine sends (the event log's, `pcr7_chain`), and:
 
-1. replays the digests: they must make the quoted PCR 7, or it is not established;
+1. replays the digests: they must make the quoted PCR 7, or that after exactly one
+   `os-separator` (systemd extends it in the initrd and logs it in its own log, so a running
+   system is past it; a constant, after the firmware's separator, where nothing is read), or it
+   is not established. Any other unlogged extend stays so: it cannot be replayed, and to go
+   round that is to take the machine's word;
 2. makes `UEFI_VARIABLE_DATA` itself for `SecureBoot` = 1, `SecureBoot` = 0 or absent,
    and an empty `PK` (the firmware's measurement of these, the hash of that structure),
    and looks for their hashes among the digests before PCR 7's separator;
@@ -1544,15 +1548,9 @@ the digests of PCR 7's events the machine sends (the event log's, `pcr7_chain`),
    value (firmware that says its measurements went wrong): the digest of each is known, and
    go-attestation refuses both.
 
-**A slot on the SHA-1 bank** is a warning (`sha1_bank`), not a state: a firmware's log can hold
-SHA-256 digests alone, and "on" must still rest on what the TPM signed. So beside a selection on
-SHA-1 the machine also quotes `sha256:7` under the same qualifying data, with the same attestation
-key, and sends the SHA-256 digests (`attest.SecureBootQuote`). Phone and vault read the state from
-that; one that does not verify is `not_established`, with no going back to the weaker bank; a machine
-leaving it out loses `on` unless its log has SHA-1 events, and a machine able to forge those is the
-SHA-1 collision the warning is for. Tests: `TestSHA1SlotEstablishesSecureBoot`,
-`TestSecureBootQuoteMustVerify`, `TestReleaseOnSHA1EstablishesFromTheSecondQuote`,
-`TestSHA1SlotOnATPMWithBothBanks` (swtpm).
+A selection on the SHA-1 bank is a warning beside the state (`sha1_bank`), which is read the same
+way from that bank's events. Tests: `TestEstablishSecureBootPastTheOSSeparator`, `TestSHA1BankIsAWarning`,
+`TestReleaseEstablishesPastTheOSSeparator`.
 
 **What one log of digests cannot show.** That a key verified anything: an
 `EV_EFI_VARIABLE_AUTHORITY` digest is of a certificate no verifier here holds. On the one real

@@ -59,6 +59,42 @@ func TestEstablishSecureBootTakesNoClaim(t *testing.T) {
 	}
 }
 
+// One OS separator past the chain is what a running system quotes, in any state, on either bank.
+// It takes nothing away or adds anything: two, another word, or an on chain past the wrong register
+// stay not established, and a state is never read from what follows the firmware's separator.
+func TestEstablishSecureBootPastTheOSSeparator(t *testing.T) {
+	for _, alg := range []uint16{attest.AlgSHA256, attest.AlgSHA1} {
+		extend := func(v []byte, word string) []byte {
+			out, err := attest.ExtendWord(alg, v, word)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		}
+		for _, state := range []string{attest.SecureBootOn, attest.SecureBootOff, attest.SecureBootSetupMode} {
+			chain := attesttest.SecureBootChain(alg, state)
+			pcr := attesttest.ReplayChain(alg, chain)
+			if got := attest.EstablishSecureBoot(alg, extend(pcr, attest.OSSeparatorWord), chain); got.State != state {
+				t.Errorf("alg %x, %s past the separator: %+v", alg, state, got)
+			}
+			for name, value := range map[string][]byte{
+				"two separators": extend(extend(pcr, attest.OSSeparatorWord), attest.OSSeparatorWord),
+				"another word":   extend(pcr, "something-else"),
+				"another first":  extend(extend(pcr, "something-else"), attest.OSSeparatorWord),
+			} {
+				if got := attest.EstablishSecureBoot(alg, value, chain); got.State != attest.SecureBootNotEstablished || !strings.Contains(got.Detail, "without logging") {
+					t.Errorf("alg %x, %s, %s: %+v", alg, state, name, got)
+				}
+			}
+		}
+		// A boot with Secure Boot off, past the separator, cannot show the events of on.
+		off := attesttest.ReplayChain(alg, attesttest.SecureBootChain(alg, attest.SecureBootOff))
+		if got := attest.EstablishSecureBoot(alg, extend(off, attest.OSSeparatorWord), attesttest.SecureBootChain(alg, attest.SecureBootOn)); got.State != attest.SecureBootNotEstablished {
+			t.Errorf("alg %x, off showing on: %+v", alg, got)
+		}
+	}
+}
+
 func TestEstablishSecureBootNotEstablished(t *testing.T) {
 	alg := attest.AlgSHA256
 	chain := attesttest.SecureBootChain(alg, attest.SecureBootOn)

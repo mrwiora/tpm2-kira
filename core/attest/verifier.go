@@ -655,8 +655,7 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 		PCRAlg:    o.Selection.Alg,
 		PCRValues: o.PCRValues,
 
-		BootContext:     o.BootContext,
-		SecureBootQuote: o.SecureBootQuote,
+		BootContext: o.BootContext,
 	}
 	verdict := Verify(ev, pol, pin, EnrolQualifyingData(v.sess.ChannelBinding()), v.cfg.now())
 	if verdict.State != StateMatch {

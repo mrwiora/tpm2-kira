@@ -131,7 +131,7 @@ func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, expectedQD []byte, n
 
 	// From the verified quote's PCR 7, never from what the machine says: a state
 	// not established, the default above, is red like off.
-	v.SecureBoot = EstablishSecureBootOf(sel.Alg, values[7], ev.BootContext.PCR7Chain, akPub, expectedQD, ev.SecureBootQuote, ev.BootContext.PCR7ChainSHA256)
+	v.SecureBoot = EstablishSecureBoot(sel.Alg, values[7], ev.BootContext.PCR7Chain)
 
 	if pr, err := pol.MatchProfile(values, now); err == nil {
 		v.Profile = pr.Name

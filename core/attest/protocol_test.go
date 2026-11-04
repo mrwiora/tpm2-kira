@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -617,6 +616,10 @@ func TestVerdictEstablishesSecureBoot(t *testing.T) {
 		{"on", SecureBootOn, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootOn) }},
 		{"off", SecureBootOff, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootOff) }},
 		{"Setup Mode", SecureBootSetupMode, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootSetupMode) }},
+		{"on, past systemd's OS separator", SecureBootOn, func(s *attesttest.SoftTPM) {
+			s.SetSecureBoot(SecureBootOn)
+			s.PassOSSeparator(AlgSHA256)
+		}},
 		{"no event log", SecureBootNotEstablished, func(s *attesttest.SoftTPM) { s.PCR7Chain = nil }},
 		{"off, the events of on", SecureBootNotEstablished, func(s *attesttest.SoftTPM) {
 			s.SetSecureBoot(SecureBootOff)
@@ -654,27 +657,21 @@ func TestFailedVerdictEstablishesNothing(t *testing.T) {
 	}
 }
 
-// A slot on the SHA-1 bank is a warning and no more: the state is established from a second
-// quote of sha256:7, or from SHA-1 events where the TPM has no SHA-256 bank, and from nothing else.
-func TestSHA1SlotEstablishesSecureBoot(t *testing.T) {
+// A machine on the SHA-1 bank is a warning beside the state, which comes from its SHA-1 events.
+func TestSHA1BankIsAWarning(t *testing.T) {
 	for _, tc := range []struct {
 		name, want, detail string
 		boot               func(s *attesttest.SoftTPM)
 	}{
-		{"on, the log in SHA-256 alone", SecureBootOn, "", func(s *attesttest.SoftTPM) { s.SetSecureBootBothBanks(SecureBootOn, false) }},
-		{"on, the log in both", SecureBootOn, "", func(s *attesttest.SoftTPM) { s.SetSecureBootBothBanks(SecureBootOn, true) }},
-		{"off", SecureBootOff, "", func(s *attesttest.SoftTPM) { s.SetSecureBootBothBanks(SecureBootOff, false) }},
-		{"no SHA-256 bank, the log in SHA-1", SecureBootOn, "", func(s *attesttest.SoftTPM) {
-			s.SetSecureBootBothBanks(SecureBootOn, true)
-			s.NoSHA256Bank, s.PCR7ChainSHA256 = true, nil
+		{"on", SecureBootOn, "", func(s *attesttest.SoftTPM) { s.SetSecureBootSHA1(SecureBootOn) }},
+		{"on, past systemd's OS separator", SecureBootOn, "", func(s *attesttest.SoftTPM) {
+			s.SetSecureBootSHA1(SecureBootOn)
+			s.PassOSSeparator(AlgSHA1)
 		}},
-		{"no SHA-256 bank, no SHA-1 events", SecureBootNotEstablished, "SHA-1 bank", func(s *attesttest.SoftTPM) {
-			s.SetSecureBootBothBanks(SecureBootOn, false)
-			s.NoSHA256Bank, s.PCR7ChainSHA256 = true, nil
-		}},
-		{"off, the SHA-256 events of on", SecureBootNotEstablished, "does not replay", func(s *attesttest.SoftTPM) {
-			s.SetSecureBootBothBanks(SecureBootOff, false)
-			s.PCR7ChainSHA256 = attesttest.SecureBootChain(AlgSHA256, SecureBootOn)
+		{"off", SecureBootOff, "", func(s *attesttest.SoftTPM) { s.SetSecureBootSHA1(SecureBootOff) }},
+		{"no events in that bank", SecureBootNotEstablished, "SHA-1 bank", func(s *attesttest.SoftTPM) {
+			s.SetSecureBootSHA1(SecureBootOn)
+			s.PCR7Chain = nil
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -684,7 +681,7 @@ func TestSHA1SlotEstablishesSecureBoot(t *testing.T) {
 			rec := enrol(t, m, p)
 			ev := p.Last(EvNeedAnchorKey)
 			if ev == nil || ev.SecureBoot == nil || ev.SecureBoot.State != tc.want || !ev.SHA1Bank || !strings.Contains(ev.SecureBoot.Detail, tc.detail) {
-				t.Fatalf("at enrolment: %+v, %+v", ev, ev.SecureBoot)
+				t.Fatalf("at enrolment: %+v", ev)
 			}
 			m.TPM.ResetCount++
 			if _, merr, perr := attestOnce(t, m, p, rec); merr != nil || perr != nil {
@@ -698,8 +695,8 @@ func TestSHA1SlotEstablishesSecureBoot(t *testing.T) {
 	}
 }
 
-// A slot on SHA-256 asks the TPM for nothing more and is not called SHA-1.
-func TestSHA256SlotHasNoSecondQuote(t *testing.T) {
+// A machine on SHA-256 is not called SHA-1.
+func TestSHA256BankIsNoWarning(t *testing.T) {
 	m, p := newMachine(t), newPhone(t)
 	m.TPM.SetSecureBoot(SecureBootOn)
 	rec := enrol(t, m, p)
@@ -712,126 +709,5 @@ func TestSHA256SlotHasNoSecondQuote(t *testing.T) {
 	}
 	if ev := p.Last(EvVerdict); ev == nil || ev.Verdict.SHA1Bank {
 		t.Fatalf("%+v", ev)
-	}
-	sel, _ := NewPCRSelection(AlgSHA256, []int{7})
-	if QuoteSecureBoot(m.TPM.Quote, make([]byte, 32), sel) != nil {
-		t.Fatal("a second quote beside SHA-256")
-	}
-}
-
-// A second quote that does not verify is not established, with a good SHA-1 chain beside it
-// too: no way down to the weaker bank from a quote that failed.
-func TestSecureBootQuoteMustVerify(t *testing.T) {
-	qd := bytes.Repeat([]byte{3}, 32)
-	sel, _ := NewPCRSelection(AlgSHA1, []int{7})
-	boot := func(t *testing.T) (*attesttest.SoftTPM, []byte, []byte) {
-		s := newSoftTPM(t)
-		s.SetSecureBootBothBanks(SecureBootOn, true)
-		return s, s.PCRsSHA1[7], s.PCR7Chain
-	}
-	establish := func(t *testing.T, s *attesttest.SoftTPM, pcr7, chain, qd2 []byte, q *SecureBootQuote) SecureBootFinding {
-		ak, err := ParseAKPublic(s.AKPub, s.AKName)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return EstablishSecureBootOf(AlgSHA1, pcr7, chain, ak, qd2, q, s.PCR7ChainSHA256)
-	}
-	t.Run("good", func(t *testing.T) {
-		s, pcr7, chain := boot(t)
-		if got := establish(t, s, pcr7, chain, qd, QuoteSecureBoot(s.Quote, qd, sel)); got.State != SecureBootOn {
-			t.Fatalf("%+v", got)
-		}
-	})
-	for name, spoil := range map[string]func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote{
-		"another session": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			return QuoteSecureBoot(s.Quote, bytes.Repeat([]byte{4}, 32), sel)
-		},
-		"another value": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			q.PCR7 = bytes.Repeat([]byte{9}, 32)
-			return q
-		},
-		"a value of the wrong size": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			q.PCR7 = q.PCR7[:20]
-			return q
-		},
-		"a broken signature": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			q.Signature = append([]byte(nil), q.Signature...)
-			q.Signature[len(q.Signature)-1] ^= 1
-			return q
-		},
-		"another attestation key": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			other, err := attesttest.NewSoftTPM()
-			if err != nil {
-				panic(err)
-			}
-			other.PCRs[7] = s.PCRs[7]
-			return QuoteSecureBoot(other.Quote, qd, sel)
-		},
-		"another selection": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			wide, _ := NewPCRSelection(AlgSHA256, []int{0, 7})
-			r, err := s.Quote(qd, wide)
-			if err != nil {
-				panic(err)
-			}
-			return &SecureBootQuote{Quoted: r.Quoted, Signature: r.Signature, PCR7: r.Values[1].Digest}
-		},
-		"the SHA-1 bank": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			r, err := s.Quote(qd, sel)
-			if err != nil {
-				panic(err)
-			}
-			return &SecureBootQuote{Quoted: r.Quoted, Signature: r.Signature, PCR7: r.Values[0].Digest}
-		},
-		"not a quote": func(s *attesttest.SoftTPM, q *SecureBootQuote) *SecureBootQuote {
-			s.TamperQuote = func(att *tpm2.TPMSAttest) { att.Magic = 0 }
-			return QuoteSecureBoot(s.Quote, qd, sel)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			s, pcr7, chain := boot(t)
-			got := establish(t, s, pcr7, chain, qd, spoil(s, QuoteSecureBoot(s.Quote, qd, sel)))
-			if got.State != SecureBootNotEstablished || !strings.Contains(got.Detail, "sha256:7") {
-				t.Fatalf("%+v", got)
-			}
-		})
-	}
-	t.Run("no attestation key", func(t *testing.T) {
-		s, pcr7, chain := boot(t)
-		got := EstablishSecureBootOf(AlgSHA1, pcr7, chain, nil, qd, QuoteSecureBoot(s.Quote, qd, sel), s.PCR7ChainSHA256)
-		if got.State != SecureBootNotEstablished {
-			t.Fatalf("%+v", got)
-		}
-	})
-}
-
-// The second quote and its chain survive the wire, in both messages that carry them.
-func TestSecureBootQuoteOnTheWire(t *testing.T) {
-	q := &SecureBootQuote{Quoted: []byte("quoted"), Signature: []byte("signature"), PCR7: bytes.Repeat([]byte{7}, 32)}
-	chain := bytes.Repeat([]byte{8}, 64)
-	m := newMachine(t)
-	ev := &Evidence{
-		Schema: SchemaVersion, DeviceID: m.DeviceID, AKName: m.TPM.AKName, Quoted: []byte("q"), Signature: []byte("s"),
-		PCRAlg: AlgSHA1, PCRValues: []PCRValue{{Index: 7, Digest: make([]byte, 20)}}, BootContext: BootContext{PCR7ChainSHA256: chain}, SecureBootQuote: q,
-	}
-	data, err := ev.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	d, err := Decode(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := DecodeEvidence(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got.SecureBootQuote, q) || !bytes.Equal(got.BootContext.PCR7ChainSHA256, chain) {
-		t.Fatalf("%+v %x", got.SecureBootQuote, got.BootContext.PCR7ChainSHA256)
-	}
-	ev.SecureBootQuote = nil
-	data, _ = ev.Encode()
-	d, _ = Decode(data)
-	if got, err := DecodeEvidence(d); err != nil || got.SecureBootQuote != nil {
-		t.Fatalf("%+v %v", got, err)
 	}
 }
