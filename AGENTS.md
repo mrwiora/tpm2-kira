@@ -149,10 +149,13 @@ It may not carry what came before.
   marks it out of date, and the image is built once, when `control` is
   left, after the person says yes. `control`'s status
   judges line by line - green what is good, red what is not with the
-  risk in brackets (SHA-1, Secure Boot off or in Setup Mode, an unvouched
+  risk in brackets (Secure Boot off or in Setup Mode, an unvouched
   endorsement key, a selection without the kernel, a loose file holding
-  the PIN, an empty passphrase, a vault that does not answer); there is
-  no separate risks list.
+  the PIN, an empty passphrase, a vault that does not answer), orange a TPM on the SHA-1 bank,
+  with its risk too: a warning on a machine with nothing better; there is
+  no separate risks list. Beside the firmware's Secure Boot variable it shows the
+  proof: the phone's and the vault's own check on the live PCR 7 and the log
+  (`control_proof.go`); systemd's log is read there for a person, never as proof.
 - **The boot image carries what the machine uses, by the boot plan**
   (internal/admin/bootplan.go, `tpm2-kira initramfs plan`). The disk unlock is always
   in it; every other part - the TOTP codes, the phone's Bluetooth gate, the

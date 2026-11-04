@@ -694,6 +694,19 @@ class Machine:
         red = re.search(rb"\x1b\[0;31m[^\n]*" + re.escape(want.split(" (risk")[0].encode()), session.buf) is not None
         self.check(f"{where} judges Secure Boot's state, in red: {want!r}", want in flat and red, flat[-800:])
 
+    def check_control_proof(self, text):
+        """The phone's and the vault's check on the running system's real PCR 7 and log: the state
+        its variables say. A machine with systemd's OS separator is past it here, in no firmware's
+        log (Debian's systemd has none yet)."""
+        state = self.secure_boot_warning()
+        want = "on: PCR 7" if state is None else "Setup Mode: PCR 7" if "Setup Mode" in state else "off: PCR 7"
+        flat = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", text))
+        _, log = self.run("grep -c '\"pcr\":7,.*os-separator' /run/log/systemd/tpm2-measure.log 2>/dev/null || true")
+        past = log.strip().splitlines()[-1:] == ["1"]
+        self.check(f"control: the proof on the running system ({'past' if past else 'no'} OS separator): {want!r}", f"Secure Boot's proof: {want}" in flat, flat[-800:])
+        if self.distro == "arch":
+            self.check("this machine is past the OS separator, in PCR 7", past, log[-200:])
+
     def session(self, remote_cmd, name, size=None):
         self.sessions += 1
         argv = ["ssh", "-tt", "-p", str(self.ssh_port), "-o", "StrictHostKeyChecking=accept-new", "-o", "PubkeyAuthentication=no",
@@ -993,6 +1006,7 @@ class Machine:
                 text, _ = s.expect(menu, 120)
                 if first:
                     first = False
+                    self.check_control_proof(text)
                     self.check_control_secure_boot("control step 1", text, {"Setup Mode": "Setup Mode (risk: nothing checks the boot chain", "off": "disabled (risk: nothing checks", "could": "state unknown,"}, s)
                 opts = menu_options(text)
                 pick = next((o for o in opts if o[1].startswith("•") and "adoption" in o[1]), None)

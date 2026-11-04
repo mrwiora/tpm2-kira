@@ -371,6 +371,10 @@ func TestControlStatusJudgement(t *testing.T) {
 	c.facts.PINLoose = true
 	c.facts.Initramfs = ""
 	got = c.factsText()
+	// SHA-1 is a warning: orange, with its risk, on a machine with nothing better.
+	if !strings.Contains(got, "\033[0;33m"+c.facts.TPM+" - "+c.facts.SHA1Why+"; the SHA-1 bank is used") {
+		t.Errorf("the SHA-1 line is not orange:\n%s", got)
+	}
 	for _, want := range []string{
 		"the SHA-1 bank is used (risk: SHA-1 collisions are practical",
 		"Setup Mode (risk: any root user can replace the keys",

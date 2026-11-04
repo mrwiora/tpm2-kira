@@ -17,7 +17,7 @@ import (
 // prereq is one line of the prerequisites: met, not met (red, with what
 // to do or the risk), or plain information.
 type prereq struct {
-	state int // prereqMet, prereqNot, prereqInfo, prereqRisk
+	state int // prereqMet, prereqNot, prereqInfo, prereqRisk, prereqWarn
 	text  string
 }
 
@@ -26,6 +26,7 @@ const (
 	prereqNot
 	prereqInfo
 	prereqRisk // red, and no prerequisite: tpm2-kira has no enforced mode
+	prereqWarn // orange, and no prerequisite: the machine has nothing better
 )
 
 // prereqs are the boot chain's prerequisites as this machine meets them.
@@ -39,7 +40,7 @@ func (c *controller) prereqs() []prereq {
 	case f.TPMErr != "":
 		add(prereqInfo, "TPM: none usable (%s) - the disk unlock works without one; the codes, the phone and the vault need it", f.TPMErr)
 	case f.UseSHA1:
-		add(prereqNot, "TPM: %s, %s - the SHA-1 bank is used (risk: SHA-1 collisions are practical)", f.TPM, f.SHA1Why)
+		add(prereqWarn, "TPM: %s, %s - the SHA-1 bank is used (risk: SHA-1 collisions are practical)", f.TPM, f.SHA1Why)
 	default:
 		add(prereqMet, "TPM: %s, SHA-256 bank", f.TPM)
 	}
@@ -124,6 +125,13 @@ func (c *controller) prereqs() []prereq {
 	default:
 		add(prereqRisk, "Secure Boot: disabled (risk: nothing checks the boot loader and the kernel)")
 	}
+	if f.Proof != nil {
+		if line, ok := f.Proof.text(); ok {
+			add(prereqMet, "Secure Boot's proof: %s", line)
+		} else {
+			add(prereqRisk, "Secure Boot's proof: %s", line)
+		}
+	}
 	return out
 }
 
@@ -140,6 +148,8 @@ func (c *controller) prereqText() string {
 			fmt.Fprintf(&b, "  %s %s\n", bad("✗"), bad(p.text))
 		case prereqRisk:
 			fmt.Fprintf(&b, "  %s %s\n", bad("!"), bad(p.text))
+		case prereqWarn:
+			fmt.Fprintf(&b, "  %s %s\n", amber("!"), amber(p.text))
 		default:
 			fmt.Fprintf(&b, "  %s %s\n", amber("•"), p.text)
 		}
