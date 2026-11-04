@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/piv"
-	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv/pivtest"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 	"golang.org/x/sys/unix"
 )
 

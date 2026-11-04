@@ -25,10 +25,10 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/mrwiora/tpm2-kira/internal/bootwait"
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/bootwait"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 )
 
 // GUID is the vendor GUID of tpm2-kira's own EFI variables.

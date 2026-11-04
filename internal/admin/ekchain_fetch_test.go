@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 )
 
 // The caIssuers fetch: the network once, the cache after, a failure

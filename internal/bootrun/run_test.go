@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/journal"
-	"github.com/mrwiora/tpm2-kira/internal/measure"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/internal/sbstate"
-	"github.com/mrwiora/tpm2-kira/internal/totp"
+	"github.com/tpm2-trust/tpm2-kira/internal/journal"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/sbstate"
+	"github.com/tpm2-trust/tpm2-kira/internal/totp"
 
 	"golang.org/x/sys/unix"
 )

@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/piv"
-	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv/pivtest"
 )
 
 func open(t *testing.T, card *pivtest.Card) *piv.Card {

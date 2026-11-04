@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 func replay(chain []byte) []byte {

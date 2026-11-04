@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 // Device is what the vault pins of a machine at enrolment and checks

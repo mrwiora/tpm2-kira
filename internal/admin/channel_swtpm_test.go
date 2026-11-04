@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 )
 
 // The channel's secrets: never in the record; open before the close in a boot of

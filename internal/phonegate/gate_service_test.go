@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 )
 
 // A coordinator for one slot with one enrolled phone and no TPM behind it:

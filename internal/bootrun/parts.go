@@ -3,19 +3,19 @@ package bootrun
 import (
 	"context"
 	"fmt"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 	"os"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/imageplan"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/internal/screen"
-	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
-	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/screen"
+	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
+	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
 )
 
 // A part is one part of the boot image that run starts when the image's

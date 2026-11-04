@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/imageplan"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
 )
 
 // Step 2 of control: what the machine combines, in submenus. Each option

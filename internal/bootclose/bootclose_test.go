@@ -18,8 +18,8 @@ import (
 	"github.com/tpm2-trust/assh/hostkey"
 	"golang.org/x/sys/unix"
 
-	"github.com/mrwiora/tpm2-kira/internal/bootwait"
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/bootwait"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
 )
 
 // setup gives a test its own paths, and a device path with nothing there.

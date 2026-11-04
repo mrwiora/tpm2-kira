@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/core/transport/frame"
+	"github.com/tpm2-trust/tpm2-kira/core/transport/frame"
 )
 
 // Config selects and describes the adapter.

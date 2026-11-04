@@ -174,7 +174,7 @@ It may not carry what came before.
   not - the next build leaves it out. Do not decide what the image carries in a hook's shell
   or at boot: add the rule to the plan.
 - **The shared core is a module of its own: `core/`**
-  (`github.com/mrwiora/tpm2-kira/core`: `attest/`, `transport/`,
+  (`github.com/tpm2-trust/tpm2-kira/core`: `attest/`, `transport/`,
   `vaultproto/`, `mobile/`). The phone (Marify, through gomobile) and the
   vault require it alone; tpm2-kira requires it through `replace ./core`.
   It requires go-tpm, x/crypto and tpm2-verifier (the EK root store, its

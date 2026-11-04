@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 // The attestation part of a slot's blob.

@@ -3,7 +3,7 @@ package measure
 import (
 	"fmt"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 // PCRTips displays information about what each PCR measures

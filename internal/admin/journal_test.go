@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/journal"
+	"github.com/tpm2-trust/tpm2-kira/internal/journal"
 )
 
 // Under systemd the narrative goes to journald's socket with a priority

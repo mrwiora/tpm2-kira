@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/imageplan"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
-	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
+	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/tpm2-trust/assh/hostkey"

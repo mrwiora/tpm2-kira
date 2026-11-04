@@ -12,11 +12,11 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // The factor's round trip on swtpm: wrapped for this TPM's EK and the

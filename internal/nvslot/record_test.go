@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
 )
 
 // useVarDir points the EFI variables at a directory of the test's own.

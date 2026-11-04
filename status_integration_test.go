@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/admin"
+	"github.com/tpm2-trust/tpm2-kira/internal/admin"
 )
 
 // The binary as it is run on a machine: the root gate, 'slot add' without

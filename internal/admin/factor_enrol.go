@@ -14,13 +14,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // FactorEnrolOptions is what 'phone salt enrol' takes.

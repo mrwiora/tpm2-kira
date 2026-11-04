@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/piv"
-	"github.com/mrwiora/tpm2-kira/internal/termguard"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv"
+	"github.com/tpm2-trust/tpm2-kira/internal/termguard"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 	"golang.org/x/sys/unix"
 )
 

@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // Transport sends one APDU and returns the response including SW1 SW2.

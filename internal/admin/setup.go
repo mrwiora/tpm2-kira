@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/internal/measure"
-	"github.com/mrwiora/tpm2-kira/internal/piv"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
 	"golang.org/x/sys/unix"
 )
 

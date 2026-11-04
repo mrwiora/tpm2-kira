@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 
 	"golang.org/x/crypto/argon2"
 )

@@ -11,11 +11,11 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/measure"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // The phone channel's secrets: the machine's static Noise key and the

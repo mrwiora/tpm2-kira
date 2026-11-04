@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 )
 
 const routeUUID = "099267cb-957a-4c7f-91cf-c25c450767bb"

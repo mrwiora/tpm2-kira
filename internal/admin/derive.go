@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // DeriveCommand is the recovery recipe's key by hand: the password and the

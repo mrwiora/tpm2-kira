@@ -16,8 +16,8 @@ import (
 
 	evlog "github.com/google/go-attestation/attest"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 // Event types used below (TCG PC Client Platform Firmware Profile).

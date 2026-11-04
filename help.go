@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/internal/admin"
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/imageplan"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
-	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
+	"github.com/tpm2-trust/tpm2-kira/internal/admin"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
 )
 
 // The help in two layers: 'tpm2-kira help' is one screen - the commands

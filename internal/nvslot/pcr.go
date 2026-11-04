@@ -3,7 +3,7 @@ package nvslot
 import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 // GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM

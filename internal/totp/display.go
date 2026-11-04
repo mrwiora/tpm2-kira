@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/measure"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2"
 	"rsc.io/qr"

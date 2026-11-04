@@ -619,21 +619,21 @@ jobs:
 
           #### From Binary
           \`\`\`bash
-          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/tpm2-kira-linux-amd64
-          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/tpm2-kira-boot-linux-amd64
+          wget https://github.com/tpm2-trust/tpm2-kira/releases/download/${VERSION}/tpm2-kira-linux-amd64
+          wget https://github.com/tpm2-trust/tpm2-kira/releases/download/${VERSION}/tpm2-kira-boot-linux-amd64
           sudo install -m755 tpm2-kira-linux-amd64 /usr/local/bin/tpm2-kira
           sudo install -m755 tpm2-kira-boot-linux-amd64 /usr/local/bin/tpm2-kira-boot
           \`\`\`
 
           #### Arch Linux
           \`\`\`bash
-          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${PACKAGE_FILE}
+          wget https://github.com/tpm2-trust/tpm2-kira/releases/download/${VERSION}/${PACKAGE_FILE}
           sudo pacman -U ${PACKAGE_FILE}
           \`\`\`
 
           #### Debian 13
           \`\`\`bash
-          wget https://github.com/mrwiora/tpm2-kira/releases/download/${VERSION}/${DEB_FILE}
+          wget https://github.com/tpm2-trust/tpm2-kira/releases/download/${VERSION}/${DEB_FILE}
           sudo apt install ./${DEB_FILE}
           sudo tpm2-kira setup
           sudo tpm2-kira slot add --pcrs 0,7
@@ -684,7 +684,7 @@ jobs:
           echo "  • Debian package: ${{ steps.package_info.outputs.DEB_FILE }}"
           echo "  • Debian source: ${{ steps.package_info.outputs.SRC_FILE }}"
           echo ""
-          echo "🔗 Release URL: https://github.com/mrwiora/tpm2-kira/releases/tag/${VERSION}"
+          echo "🔗 Release URL: https://github.com/tpm2-trust/tpm2-kira/releases/tag/${VERSION}"
           echo ""
           echo "📊 Artifact sizes:"
           echo "  • Binary: $(du -h dist/tpm2-kira-linux-amd64 | cut -f1)"

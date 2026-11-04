@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	. "github.com/mrwiora/tpm2-kira/core/attest"
+	. "github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 // Golden vectors for every canonical computation. docs/PROTOCOL-BLE.md §9

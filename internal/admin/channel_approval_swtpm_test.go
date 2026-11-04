@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 	"golang.org/x/sys/unix"
 )
 

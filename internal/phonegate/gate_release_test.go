@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 )
 
 // An attested boot with a phone salt expected waits for the Release:

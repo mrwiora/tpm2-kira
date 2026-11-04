@@ -26,9 +26,9 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/hostkey"
 
-	"github.com/mrwiora/tpm2-kira/internal/bootwait"
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/bootwait"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 )
 
 // CounterVar counts the hard reboots for a TPM that did not answer, under

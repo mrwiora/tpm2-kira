@@ -7,8 +7,8 @@ import (
 	"os"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/mrwiora/tpm2-kira/core/attest"
 	"github.com/tpm2-trust/go-uefi-slim/uki"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 // BootPCRSignaturePaths are where the initrd finds the booted image's

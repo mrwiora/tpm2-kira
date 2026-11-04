@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
-	"github.com/mrwiora/tpm2-kira/core/transport/frame"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest/attesttest"
+	"github.com/tpm2-trust/tpm2-kira/core/transport/frame"
 )
 
 // DemoMachine is one simulated machine. It keeps its identity across

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 	"golang.org/x/crypto/ssh"
 )
 

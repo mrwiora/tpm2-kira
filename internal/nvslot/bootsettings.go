@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 
 	"github.com/google/go-tpm/tpm2/transport"
 )

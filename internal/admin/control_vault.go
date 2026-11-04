@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/prompt"
-	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/prompt"
+	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // control's option for the disk key with the vault's salt (docs/VAULT.md):

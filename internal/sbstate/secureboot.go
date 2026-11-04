@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/tpm2-trust/go-uefi-slim/efivar"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
 )
 
 // State is what the firmware says. Known is false when either variable cannot be

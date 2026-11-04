@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 func judge(policy HWCheckPolicy, answer string, revoked map[string]string, rerr error) (*PhoneJudge, *strings.Builder) {

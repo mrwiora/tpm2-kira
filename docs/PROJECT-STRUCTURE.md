@@ -7,7 +7,7 @@ Where things are in the repository, and how the tests are run.
 ```
 ├── main.go, help.go         # tpm2-kira, the installed system's command line: routing and the help pages
 ├── cmd/tpm2-kira-boot/      # tpm2-kira-boot, what the boot image carries: run, close, machine-id, unlock-key, ssh-child, gate-child
-├── core/                    # The shared core: a Go module of its own (github.com/mrwiora/tpm2-kira/core),
+├── core/                    # The shared core: a Go module of its own (github.com/tpm2-trust/tpm2-kira/core),
 │   │                        #   what the phone (Marify) and the vault require alone: go-tpm, x/crypto, tpm2-verifier,
 │   │                        #   nothing of internal/ or aSSH (the module boundary keeps it so)
 │   ├── attest/              # Phone attestation core: protocol, Noise, Verify(); no device access

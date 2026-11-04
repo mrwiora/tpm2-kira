@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 )
 
 // luks enrol on a LUKS2 image: the keyslot added through cryptsetup with

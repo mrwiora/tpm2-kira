@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/imageplan"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
 )
 
 // control's facts on a software TPM: what it reads from the TPM and the

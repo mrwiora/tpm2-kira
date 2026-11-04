@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 )
 
 // 'slot info' reads the blob's attestation part for a human: the machine as an

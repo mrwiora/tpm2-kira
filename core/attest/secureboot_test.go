@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest/attesttest"
 )
 
 func extendChain(chain []byte, digest []byte) ([]byte, []byte) {

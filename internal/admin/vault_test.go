@@ -21,12 +21,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
-	"github.com/mrwiora/tpm2-kira/core/vaultproto"
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
-	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
+	"github.com/tpm2-trust/tpm2-kira/core/attest/attesttest"
+	"github.com/tpm2-trust/tpm2-kira/core/vaultproto"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
 )
 
 // The vault's parts as the combiner's inputs are fixed by the parts, the

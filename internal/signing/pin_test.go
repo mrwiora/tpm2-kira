@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/piv"
-	"github.com/mrwiora/tpm2-kira/internal/piv/pivtest"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv/pivtest"
 	"golang.org/x/sys/unix"
 )
 

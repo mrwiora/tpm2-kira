@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 )
 
 // A header's metadata as cryptsetup dumps it: two keyslots, one of them
