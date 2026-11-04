@@ -38,11 +38,11 @@ func TestRecipeOfWords(t *testing.T) {
 		{"tpm", "vault", false, RecipeUnattendedVault},
 		{"tpm", "vault", true, RecipeUnattendedVaultPepper},
 	} {
-		r, err := RecipeOf(c.password, c.salt, c.pepper)
+		r, err := RecipeOf(c.password, c.salt, c.pepper, false)
 		if err != nil || r != c.want {
 			t.Errorf("%s/%s pepper %v: %v %v, want %v", c.password, c.salt, c.pepper, r, err, c.want)
 		}
-		if again, err := RecipeOf(strings.Fields(r.Words())[1], strings.Fields(r.Words())[3], r.Pepper()); err != nil || again != r {
+		if again, err := RecipeOf(strings.Fields(r.Words())[1], strings.Fields(r.Words())[3], r.Pepper(), r.Keyboard()); err != nil || again != r {
 			t.Errorf("%v: its words %q give %v %v", r, r.Words(), again, err)
 		}
 	}
@@ -59,7 +59,7 @@ func TestRecipeOfWords(t *testing.T) {
 		{"held", "vault", false, "--password"},
 		{"typed", "usb", false, "--salt"},
 	} {
-		_, err := RecipeOf(c.password, c.salt, c.pepper)
+		_, err := RecipeOf(c.password, c.salt, c.pepper, false)
 		if err == nil || !strings.Contains(err.Error(), c.why) {
 			t.Errorf("%s/%s pepper %v: %v, want %q", c.password, c.salt, c.pepper, err, c.why)
 		}
@@ -111,7 +111,7 @@ func TestParseKiraToken(t *testing.T) {
 		"another version's":      `{"type": "tpm2-kira-vault", "keyslots": ["2"], "slot": 1}`,
 		"the one-type form":      `{"type": "tpm2-kira", "keyslots": ["2"], "mode": "tpm+vault", "slot": 1}`,
 		"type and recipe differ": `{"type": "tpm2-kira-1400", "keyslots": ["2"], "recipe": 5121, "slot": 1}`,
-		"no recipe":              `{"type": "tpm2-kira-1402", "keyslots": ["2"], "recipe": 5122, "slot": 1}`,
+		"no recipe":              `{"type": "tpm2-kira-1404", "keyslots": ["2"], "recipe": 5124, "slot": 1}`,
 		"bound without its slot": `{"type": "tpm2-kira-1400", "keyslots": ["2"], "recipe": 5120}`,
 	} {
 		got, ours := ParseKiraToken(json.RawMessage(js))

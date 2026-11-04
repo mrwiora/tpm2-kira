@@ -397,6 +397,12 @@ func FetchRemote(ctx context.Context, tpmDev transport.TPM, vs vaultSlot, c *vau
 			return nil, err
 		}
 		switch rsp.Status {
+		case vaultproto.StatusKeyboard:
+			if rsp.Keyboard == nil {
+				return nil, errors.New("the vault answered with no keyboard")
+			}
+			rsp.RequestID = ch.RequestID
+			return &rsp, nil
 		case vaultproto.StatusReleased:
 			if rsp.Remote == nil {
 				return nil, errors.New("the vault released nothing")
@@ -574,10 +580,11 @@ func isVerification(err error) bool {
 // the key provider to answer with: an unattended recipe's key, a typed
 // recipe's salt; done is closed when every slot has been tried.
 type Keys struct {
-	keys  map[int][]byte
-	salts map[int][]byte
-	errs  map[int]error
-	done  chan struct{}
+	keys      map[int][]byte
+	salts     map[int][]byte
+	keyboards map[int]*KeyboardSession
+	errs      map[int]error
+	done      chan struct{}
 }
 
 // startVaultKeys opens, in the background, the key of every slot with the
@@ -595,7 +602,7 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 		tpmDev.Close()
 		return nil
 	}
-	vk := &Keys{keys: map[int][]byte{}, salts: map[int][]byte{}, errs: map[int]error{}, done: make(chan struct{})}
+	vk := &Keys{keys: map[int][]byte{}, salts: map[int][]byte{}, keyboards: map[int]*KeyboardSession{}, errs: map[int]error{}, done: make(chan struct{})}
 	go func() {
 		defer close(vk.done)
 		defer tpmDev.Close()
@@ -606,6 +613,19 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 				log(fmt.Sprintf("vault: slot %d: %s", n, s))
 			}
 			say(fmt.Sprintf("asking the vault at %s for the disk's remote part ...", vs.Att.Vault.URL))
+			if vs.Att.Vault.Keyboard {
+				sess, err := OpenKeyboard(ctx, tpmDev, vs, say)
+				if err != nil {
+					vk.errs[n] = err
+					fmt.Fprintf(out, "%s \033[0;31mSlot #%d: nothing from the vault:\033[0m %s\n", screen.Tag(screen.TagYellow), n, Problem(err))
+					log(fmt.Sprintf("vault: slot %d: no keyboard: %s", n, Problem(err)))
+					continue
+				}
+				vk.keyboards[n] = sess
+				fmt.Fprintf(out, "%s \033[0;32mSlot #%d: the vault's keyboard is here; the vault shows the keys to press after the code screen.\033[0m\n", screen.Tag(screen.TagYellow), n)
+				log(fmt.Sprintf("vault: slot %d: the keyboard is opened", n))
+				continue
+			}
 			key, salt, err := Open(ctx, tpmDev, vs, say)
 			if err != nil {
 				vk.errs[n] = err
@@ -692,6 +712,23 @@ func (vk *Keys) SaltFor(volume string, r diskkey.Recipe) []byte {
 	}
 	if salt, ok := vk.salts[*tok.Slot]; ok {
 		return append([]byte(nil), salt...)
+	}
+	return nil
+}
+
+// KeyboardFor is the vault's one-time keyboard for a volume whose keyslot has such a recipe, or nil.
+// It waits for the attempt to end.
+func (vk *Keys) KeyboardFor(volume string, r diskkey.Recipe) diskkey.KeyboardSession {
+	if vk == nil {
+		return nil
+	}
+	<-vk.done
+	tok, err := diskkey.TokenOf(volume, r)
+	if err != nil || tok.Slot == nil {
+		return nil
+	}
+	if sess, ok := vk.keyboards[*tok.Slot]; ok {
+		return sess
 	}
 	return nil
 }

@@ -241,6 +241,9 @@ type Evidence struct {
 	// record once the person has accepted the verdict, and returns it in
 	// a Release after every trusted receipt from then on.
 	FactorKeep *FactorBlob
+	// KeyboardKeep asks the verifier to keep a salt typed through the keyboard, on the booted
+	// system as FactorKeep is (keyboard.go).
+	KeyboardKeep *KeyboardKeep
 }
 
 // FactorBlob is a wrapped factor: TPM2_MakeCredential output for the
@@ -278,6 +281,15 @@ func (m *Evidence) Encode() ([]byte, error) {
 			e.String(17, f.Label)
 		}
 	}
+	if k := m.KeyboardKeep; k != nil {
+		e.Bytes(18, k.Salt)
+		e.Bytes(19, k.ReleaseKeyPublic)
+		e.Bytes(20, k.SigningPublic)
+		e.Bytes(21, k.PolicyRef)
+		if k.Label != "" {
+			e.String(22, k.Label)
+		}
+	}
 	return e.Finish()
 }
 
@@ -306,6 +318,15 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 			CredentialBlob:  cred,
 			EncryptedSecret: d.Bytes(16, maxCredential, true),
 			Label:           d.String(17, maxShortString, false),
+		}
+	}
+	if salt := d.Bytes(18, KeyboardMaxLength, false); salt != nil {
+		m.KeyboardKeep = &KeyboardKeep{
+			Salt:             salt,
+			ReleaseKeyPublic: d.Bytes(19, maxTPMPublic, true),
+			SigningPublic:    d.Bytes(20, maxTPMPublic, true),
+			PolicyRef:        d.Bytes(21, 64, true),
+			Label:            d.String(22, maxShortString, false),
 		}
 	}
 	vals := d.Bytes(7, 2+maxPCRValues*(5+65), true)
@@ -435,6 +456,7 @@ func DecodeReceipt(d *Decoder) (*Receipt, error) {
 const (
 	ReleaseKindPassphrase uint8 = 1
 	ReleaseKindFactor     uint8 = 2
+	ReleaseKindKeyboard   uint8 = 3 // the pad for a salt typed through the keyboard (keyboard.go)
 )
 
 // Release hands the attester a TPM-bound secret after a trusted receipt

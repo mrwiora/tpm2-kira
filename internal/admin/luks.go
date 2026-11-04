@@ -256,6 +256,9 @@ func vaultRecipeOf(v *nvslot.VaultAttestation) diskkey.Recipe {
 	if v.Pepper {
 		r |= diskkey.Recipe(diskkey.FlagPepper)
 	}
+	if v.Keyboard {
+		r |= diskkey.Recipe(diskkey.FlagKeyboard)
+	}
 	return r
 }
 
@@ -470,7 +473,8 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if label == "" {
 			label = "luks"
 		}
-	case diskkey.RecipePhoneSalt:
+	case diskkey.RecipePhoneSalt, diskkey.RecipePhoneKeyboard:
+		o.Remote.Keyboard = o.Recipe.Keyboard()
 		idx, err := boundSlotIndex(o.Remote.SealIndex)
 		if err != nil {
 			return err
@@ -487,7 +491,8 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if label == "" {
 			label = "luks"
 		}
-	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper, diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper:
+	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper, diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper, diskkey.RecipeVaultKeyboard, diskkey.RecipeVaultKeyboardPepper:
+		o.Vault.Keyboard = o.Recipe.Keyboard()
 		o.Vault.Pepper = o.Recipe.Pepper()
 		o.Vault.TypedPassword = !o.Recipe.Unattended()
 		k, s, err := vaultEnrolKey(o.Vault)
@@ -540,6 +545,16 @@ func LuksEnrol(o LuksEnrolOptions) error {
 	// written and asks accordingly. Only the route must be in place.
 	if advice := RouteAdvice(o.Device); advice != "" {
 		fmt.Print(advice)
+	}
+	if o.Recipe.Keyboard() {
+		from := "the phone"
+		if o.Recipe.FromVault() {
+			from = "the vault"
+		}
+		fmt.Printf("Every boot %s shows the keys to press at the machine, different every time, and\n", from)
+		fmt.Println("the password is asked with them. Without it, the recovery recipe and the recovery")
+		fmt.Println("passphrase stay the way in.")
+		return nil
 	}
 	if o.Recipe.FromVault() && o.Recipe.Pepper() {
 		fmt.Println("Every boot waits until an operator approves it on the vault with the pepper;")

@@ -306,7 +306,7 @@ var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //
 // ask is where the person is asked: consoleAsk, or the SSH session that
 // confirmed the code screen (remoteServer.ask).
-func DiskKey(salt func(volume string, r Recipe) []byte, vault func(volume string) ([]byte, error), recipe func(volume string) (recipes []Recipe, why string), ask Prompter) func(volume string) ([]byte, error) {
+func DiskKey(salt func(volume string, r Recipe) []byte, keyboard func(volume string, r Recipe) KeyboardSession, vault func(volume string) ([]byte, error), recipe func(volume string) (recipes []Recipe, why string), ask Prompter) func(volume string) ([]byte, error) {
 	return func(volume string) ([]byte, error) {
 		recipes, why := recipe(volume)
 		var vaultErr error
@@ -325,6 +325,14 @@ func DiskKey(salt func(volume string, r Recipe) []byte, vault func(volume string
 			}
 			// A typed recipe: the first the volume has, after a vault that
 			// gave no key.
+			if r.Keyboard() {
+				if keyboard != nil {
+					if sess := keyboard(volume, r); sess != nil {
+						return keyboardKey(volume, r, vaultErr, sess, ask)
+					}
+				}
+				return typedKey(volume, RecipeRecovery, noKeyboard(r, vaultErr), salt, ask)
+			}
 			return typedKey(volume, r, vaultErr, salt, ask)
 		}
 		if vaultErr != nil {
@@ -334,6 +342,73 @@ func DiskKey(salt func(volume string, r Recipe) []byte, vault func(volume string
 			return nil, fmt.Errorf("%w (%s)", ErrUnlockSkipped, why)
 		}
 		return nil, ErrUnlockSkipped
+	}
+}
+
+// KeyboardSession is this boot's one-time keyboard of a salt typed through it: the phone's or the
+// vault's. Salt takes what was typed and gives the salt for the combiner, or ErrWrongKeys to ask
+// again; the vault's says so itself and may wait for an operator's pepper. NeedKeys is false once it
+// has what it needs: a key that opens nothing is asked for again, and the keys need not be.
+type KeyboardSession interface {
+	NeedKeys() bool
+	From() string // "your phone", "the vault"
+	Salt(keys []byte) ([]byte, error)
+}
+
+// ErrWrongKeys says what was typed is not what the phone or the vault shows.
+var ErrWrongKeys = errors.New("those are not the keys shown")
+
+// keyboardTries bounds the questions for the keys per key asked for.
+const keyboardTries = 3
+
+func noKeyboard(r Recipe, vaultErr error) error {
+	from := "your phone"
+	if r.FromVault() {
+		from = "the vault"
+	}
+	if vaultErr != nil {
+		return fmt.Errorf("no keyboard from %s (%w)", from, vaultErr)
+	}
+	return fmt.Errorf("no keyboard from %s", from)
+}
+
+// keyboardKey makes the key of a salt typed through the keyboard: the password, then the keys the
+// phone or the vault shows, through this boot's pad. The keys are one-time, so no recording of them
+// is of use; the password is typed as ever.
+func keyboardKey(volume string, r Recipe, vaultErr error, sess KeyboardSession, ask Prompter) ([]byte, error) {
+	note := "the key is derived from your password and a salt you type through a one-time keyboard:\n" +
+		"press the keys " + sess.From() + " shows, not your salt. They hold for this boot alone.\n" +
+		"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
+	if vaultErr != nil {
+		note = fmt.Sprintf("no key from the vault (%v):\n", vaultErr) + note
+	}
+	pw, err := ask(volume, "Password", note)
+	if err != nil {
+		return nil, err
+	}
+	defer wipe.Bytes(pw)
+	keysNote := ""
+	for try := 0; ; try++ {
+		var keys []byte
+		if sess.NeedKeys() {
+			if keys, err = ask(volume, "Keys", keysNote); err != nil {
+				return nil, err
+			}
+		}
+		s, err := sess.Salt(keys)
+		wipe.Bytes(keys)
+		if errors.Is(err, ErrWrongKeys) {
+			if try+1 >= keyboardTries {
+				return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, err)
+			}
+			keysNote = "those are not the keys shown. Press the keys " + sess.From() + " shows."
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, err)
+		}
+		defer wipe.Bytes(s)
+		return derive(pw, s)
 	}
 }
 
@@ -395,7 +470,8 @@ type Prompter func(volume, what, note string) ([]byte, error)
 // The prompt, as the person sees it: a note under the code screen's own
 // tag saying what the key is made of and where Ctrl-C leads, then the
 // question in bold, as systemd's own prompt is - "Password" is what the
-// person types, "Salt" the second part they type in the recovery recipe;
+// person types, "Salt" the second part they type in the recovery recipe,
+// "Keys" what a phone or a vault shows for a salt typed through its keyboard;
 // the phone's salt is never asked for.
 //
 //	[ KIRA ] Disk cryptroot: the key is derived from your password and the salt your phone returned.

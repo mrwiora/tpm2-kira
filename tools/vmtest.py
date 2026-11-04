@@ -139,6 +139,7 @@ SCENARIOS = (
     Scenario("revoked", budget(60, 66), needs=("tpm-salt", "vault-pepper"), vault=True, secure=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True, secure=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True, secure=True),
+    Scenario("keyboard-vault", needs=("vault-pepper",), vault=True, secure=True),
     Scenario("firmware-refuses", budget(12, 10), needs=(SECURE_BOOT,), secure=True),
 )
 ALWAYS = "typed-boot"  # what every scenario of the setup in Setup Mode starts from
@@ -1704,6 +1705,81 @@ class Machine:
         out = vault.admin("audit")
         self.check("the vault's audit holds no pepper", self.PEPPER not in out, out[-300:])
 
+    def vault_keyboard(self):
+        """The salt typed through the vault's one-time keyboard, with a pepper (0x1403): the keys the
+        vault's CLI shows, typed at the prompt over SSH; wrong ones are refused; then the operator
+        approves with the pepper. A second boot's keys are others, and nothing of them is in the audit."""
+        vault = self.vault_of_run
+        self.head("the salt typed through the vault's one-time keyboard, with a pepper (0x1403)")
+        self.vault_leave(vault)
+        name = self.name + "-keyboard"
+        url, pin, token = self.vault_token(vault, name)
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --keyboard --url {url} --pin {pin} --token {token} --ca {self.CA_FILE}", "luks-enrol-vault-keyboard")
+        try:
+            s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
+            s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
+            s.expect(r"Password \(typed at the machine at every boot\): ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"The same password again: ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1403 ", 300)
+            self.vault_keyslot, self.vault_device = m.group(1), name
+            s.wait_end(120)
+            self.check("luks enrol --salt vault --pepper --keyboard: a keyslot of recipe 0x1403", True)
+        except Fail as e:
+            self.check("luks enrol --keyboard", False, str(e))
+            raise
+        finally:
+            s.close()
+        rc, out = self.run("tpm2-kira status 2>&1", save="status-vault-keyboard.log")
+        self.check("status: the keyboard's recipe", "typed through a one-time keyboard" in out, out[-500:])
+
+        keys_seen = []
+        for boot in (1, 2):
+            self.head(f"boot {boot} through the vault's keyboard")
+            self.run("systemctl reboot")
+            self.wait_port(22, False, 120)
+            if not self.check(f"keyboard {boot}: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
+                raise Fail("no boot SSH server")
+            s = self.boot_session(f"keyboard-{boot}")
+            try:
+                text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
+                self.after_resume_boot(text)
+                keys = None
+                deadline = time.time() + 120
+                while time.time() < deadline and keys is None:
+                    m = re.search(r"of " + re.escape(name) + r": press these keys at the machine: (\S+)", vault.admin("requests"))
+                    keys = m.group(1) if m else None
+                    time.sleep(1) if keys is None else None
+                if not self.check(f"keyboard {boot}: the vault's CLI shows the keys", keys is not None):
+                    raise Fail("no keys shown")
+                keys_seen.append(keys)
+                s.send("\r")
+                text, _ = s.expect(r"Password for disk \S+: ?$", 300)
+                self.check(f"keyboard {boot}: the prompt says to press what the vault shows", "press the keys the vault shows" in text, text[-500:])
+                s.send(VAULT_PASSWORD + "\r")
+                s.expect(r"Keys for disk \S+: ?$", 60)
+                wrong = keys[::-1] if keys[::-1] != keys else "a" * len(keys)
+                s.send(wrong + "\r")
+                text, _ = s.expect(r"Keys for disk \S+: ?$", 60)
+                self.check(f"keyboard {boot}: wrong keys are refused and asked for again", "not the keys shown" in text, text[-400:])
+                s.send(keys + "\r")
+                rid = vault.pending(name, 120)
+                if not self.check(f"keyboard {boot}: right keys, and the boot waits for the pepper", rid is not None):
+                    raise Fail("no pending request")
+                rc, out = vault.admin_input("a\n" + self.PEPPER + "\n", "requests", "answer")
+                self.log.save(f"vault-keyboard-answer-{boot}.log", out)
+                self.check(f"keyboard {boot}: the operator approves with the pepper, after the keys", rc == 0 and "approved" in out, out[-400:])
+                s.wait_end(600)
+            finally:
+                s.close()
+            if not self.check(f"keyboard {boot}: the disk opens with password, keys and pepper", self.wait_port(22, True, 300)):
+                raise Fail("the keyboard's boot did not come up")
+            self.booted(f"keyboard {boot}")
+        self.check("the second boot's keys are others", keys_seen[0] != keys_seen[1], str(len(keys_seen)))
+        out = vault.admin("audit")
+        self.log.save("vault-audit-keyboard.log", out)
+        self.check("the vault's audit holds neither keys nor pepper", self.PEPPER not in out and not any(k in out for k in keys_seen), out[-300:])
+
     def slot_life(self):
         self.head("a slot's life")
         rc, out = self.run(f"tpm2-kira slot approve --nvram {self.slots[-1]} 2>&1", save="slot-approve.log")
@@ -1980,7 +2056,7 @@ class Machine:
         """What each scenario does here."""
         hib = self.hib
         out = {"typed-boot": self.first_boot, "second-typed-boot": lambda: self.cycle(3), "unapproved": self.unapproved_kernel, "tpm-salt": self.tpm_salt,
-               "vault-pepper": self.vault_pepper, "revoked": self.revoked, "vault-alone": self.vault_alone, "typed-vault": self.vault_typed,
+               "vault-pepper": self.vault_pepper, "revoked": self.revoked, "vault-alone": self.vault_alone, "typed-vault": self.vault_typed, "keyboard-vault": self.vault_keyboard,
                "slot-life": self.slot_life, "removal": self.removal, SECURE_BOOT: self.secure_boot_setup, "firmware-refuses": self.firmware_refuses}
         if hib:
             out.update({"V6": hib.swap_risk, "hibernate": hib.scenario_hibernate, "debian-resume": hib.scenario_resume, "V3": hib.step_v3, "no-tpm": hib.step_no_tpm, "V4-reverted": hib.step_v4_reverted,

@@ -66,7 +66,11 @@ func (r *EnrolRequest) Check() error {
 	if err := r.Selection.check(); err != nil {
 		return err
 	}
-	if len(r.Remote.Credential) == 0 || len(r.Remote.EncryptedSecret) == 0 {
+	if r.KeyboardSalt != nil {
+		if err := attest.CheckKeyboardSalt(r.KeyboardSalt); err != nil {
+			return err
+		}
+	} else if len(r.Remote.Credential) == 0 || len(r.Remote.EncryptedSecret) == 0 {
 		return errors.New("no wrapped remote part")
 	}
 	if _, err := r.ReleaseKeyName(); err != nil {

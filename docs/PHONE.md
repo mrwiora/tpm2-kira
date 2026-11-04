@@ -115,3 +115,10 @@ The phone apps are specified in [mobile/](mobile/). The protocol is
 defined in [PROTOCOL-BLE.md](PROTOCOL-BLE.md), the design in
 [PLAN-PHONE.md](PLAN-PHONE.md) and
 [PLAN-BLE.md](PLAN-BLE.md).
+
+## The keys to press
+
+With a keyslot of `0x1302` the phone shows, after a trusted verdict, the keys to press at the machine
+for this boot alone: a salt typed through a one-time keyboard, which this phone holds and can read
+([DISK-KEY.md](DISK-KEY.md#the-salt-typed-through-a-one-time-keyboard-0x1302-0x1402-0x1403)). `phone
+salt enrol --keyboard` hands the salt over; the phone keeps it instead of a phone salt.

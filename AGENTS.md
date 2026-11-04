@@ -92,6 +92,11 @@ It may not carry what came before.
   out is in docs/SSH.md, "The close: what it can come to". Every other outcome of the
   close goes on to the passphrase.
   Do not build a mode that holds the boot on the phone's verdict.
+- **A salt typed through a one-time keyboard is the one salt its holder can read** (`0x1302`,
+  `0x1402`, `0x1403`; `core/attest/keyboard.go`): by the owner's decision, for a person who wants no
+  recording of the keyboard to be of use. Every other salt stays what the phone or the vault cannot open.
+  One pad per position, never one table; wrapped for the TPM as well as the channel; the keys and the
+  salt never in a log or the audit (docs/DISK-KEY.md).
 - **The phone channel follows a moved PCR 7 on a person's word alone.**
   Its secrets open with the signing key, which a hook holds too, so a hook's
   approval (`--unattended`, `--if-moved`), or one with no terminal and no flag,

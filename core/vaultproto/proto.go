@@ -102,6 +102,10 @@ type EnrolRequest struct {
 	// passes it on once, wrapped for the TPM (ReleaseResponse.Pepper). The
 	// pepper itself is never sent at enrolment; the vault never keeps it.
 	Pepper bool `json:"pepper,omitempty"`
+
+	// KeyboardSalt is a salt typed through a one-time keyboard (keyboard.go), sent once, here, over
+	// TLS. The vault keeps it encrypted as it keeps R; with it there is no R.
+	KeyboardSalt []byte `json:"keyboard_salt,omitempty"`
 }
 
 // EnrolChallenge proves the attestation key lives in the TPM holding the
@@ -215,6 +219,8 @@ type ReleaseResponse struct {
 	Status     string         `json:"status"`
 	Remote     *Wrapped       `json:"remote,omitempty"`
 	Pepper     *WrappedPepper `json:"pepper,omitempty"`
+	Keyboard   *WrappedPepper `json:"keyboard,omitempty"` // StatusKeyboard: the pad under K, K for the TPM
+	RequestID  string         `json:"-"`                  // the machine's note of which request this answers
 	RetryAfter int            `json:"retry_after,omitempty"`
 	Reason     string         `json:"reason,omitempty"`
 }

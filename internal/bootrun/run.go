@@ -822,6 +822,8 @@ func nextPrompt(recipes []diskkey.Recipe) string {
 	switch r := recipes[0]; {
 	case r == diskkey.RecipeRecovery:
 		return "the password and salt prompt"
+	case r.Keyboard():
+		return "the password prompt, then the keys shown"
 	case r == diskkey.RecipePhoneSalt, r == diskkey.RecipeTPMSalt, r.FromVault() && !r.Unattended():
 		return "the password prompt"
 	case r.Unattended():
@@ -840,7 +842,7 @@ func nextPrompt(recipes []diskkey.Recipe) string {
 func gateEventPrinter(modeOf func() []diskkey.Recipe) func(prev, cur phonegate.GateStatus) {
 	return func(prev, cur phonegate.GateStatus) {
 		mode := modeOf()
-		phoneSalt := slices.Contains(mode, diskkey.RecipePhoneSalt)
+		phoneSalt := slices.Contains(mode, diskkey.RecipePhoneSalt) || slices.Contains(mode, diskkey.RecipePhoneKeyboard)
 		switch cur.State {
 		case phonegate.GateWaiting:
 			if prev.State == "" {

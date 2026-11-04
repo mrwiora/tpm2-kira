@@ -199,6 +199,15 @@ func (c *controller) runVault() error {
 		return err
 	}
 
+	keyboard := false
+	if typedPassword {
+		keyboard, err = c.confirm("The salt typed through a one-time keyboard?",
+			"At every boot the vault shows other keys to press at the machine (its CLI, its REST API), and this TPM opens the mapping that makes them your salt, so a recording of the keys is no use. The vault then holds this salt and can read it, which it cannot otherwise; the salt has 8 characters.")
+		if err != nil {
+			return err
+		}
+	}
+
 	dev, err := c.pickDevice()
 	if err != nil {
 		return err
@@ -210,6 +219,9 @@ func (c *controller) runVault() error {
 	}
 	if pepper {
 		recipe |= diskkey.Recipe(diskkey.FlagPepper)
+	}
+	if keyboard {
+		recipe |= diskkey.Recipe(diskkey.FlagKeyboard)
 	}
 	if err := LuksEnrol(LuksEnrolOptions{Device: dev, Recipe: recipe,
 		Vault: VaultEnrolOptions{TPMPath: c.o.TPMPath, SealIndex: uint32(strong.Slot), URL: url, Pin: pin, Token: string(token),

@@ -114,6 +114,8 @@ type VaultAttestation struct {
 	Local WrappedFactor
 	// Pepper: the salt is made with an operator's pepper too.
 	Pepper bool
+	// Keyboard: the vault holds a salt typed through its one-time keyboard, and no remote part.
+	Keyboard bool
 	// PepperCheck is set for an unattended recipe with a pepper
 	// (vaultkey.PepperCheck of the key): it tells a mistyped pepper from
 	// the right one before cryptsetup sees the key. Empty without.
@@ -317,6 +319,11 @@ func (v *VaultAttestation) marshal() ([]byte, error) {
 		w.u8(0)
 	}
 	w.lp16(v.PepperCheck)
+	if v.Keyboard {
+		w.u8(1)
+	} else {
+		w.u8(0)
+	}
 	return w.b.Bytes(), nil
 }
 
@@ -349,6 +356,7 @@ func (v *VaultAttestation) unmarshal(data []byte) error {
 	v.Local.EncryptedSecret = r.lp32(1024)
 	v.Pepper = r.u8() == 1
 	v.PepperCheck = r.lp16(PepperCheckSize)
+	v.Keyboard = r.u8() == 1
 	if r.err != nil {
 		return r.err
 	}

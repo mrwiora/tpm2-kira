@@ -27,15 +27,16 @@ import (
 )
 
 const (
-	gateOpIdentity   = "identity"
-	gateOpQuote      = "quote"
-	gateOpBoot       = "boot-context"
-	gateOpEventlog   = "eventlog"
-	gateOpReceipt    = "receipt"
-	gateOpReport     = "report"
-	gateOpBootKey    = "boot-key"
-	gateOpFactorKeep = "factor-keep"
-	gateOpRelease    = "release"
+	gateOpIdentity     = "identity"
+	gateOpQuote        = "quote"
+	gateOpBoot         = "boot-context"
+	gateOpEventlog     = "eventlog"
+	gateOpReceipt      = "receipt"
+	gateOpReport       = "report"
+	gateOpBootKey      = "boot-key"
+	gateOpFactorKeep   = "factor-keep"
+	gateOpKeyboardKeep = "keyboard-keep"
+	gateOpRelease      = "release"
 
 	maxGateRequest  = 64 << 10                         // the largest is a receipt
 	maxGateResponse = 2*attest.MaxEventlogSize + 1<<16 // an event log, base64 in JSON
@@ -70,9 +71,10 @@ type gateResponse struct {
 	BootAnswer *attest.BootAnswer `json:"boot_answer,omitempty"`
 	BootState  uint8              `json:"boot_state,omitempty"`
 	// factor-keep: the factor to ask the phone to keep; release: the status.
-	Keep          *attest.FactorBlob `json:"keep,omitempty"`
-	ReleaseStatus uint8              `json:"release_status,omitempty"`
-	Message       string             `json:"message,omitempty"`
+	Keep          *attest.FactorBlob   `json:"keep,omitempty"`
+	KeepKeyboard  *attest.KeyboardKeep `json:"keep_keyboard,omitempty"`
+	ReleaseStatus uint8                `json:"release_status,omitempty"`
+	Message       string               `json:"message,omitempty"`
 }
 
 func writeGateFrame(w io.Writer, v any, limit int) error {
@@ -224,6 +226,11 @@ func answerGate(host GateHost, req *gateRequest) *gateResponse {
 		return &gateResponse{BootAnswer: answer, BootState: state}
 	case gateOpFactorKeep:
 		return &gateResponse{Keep: host.FactorToKeep()}
+	case gateOpKeyboardKeep:
+		if kb, ok := host.(attest.KeyboardBackend); ok {
+			return &gateResponse{KeepKeyboard: kb.KeyboardToKeep()}
+		}
+		return &gateResponse{}
 	case gateOpRelease:
 		if req.Release == nil {
 			return &gateResponse{Err: "no release"}
@@ -362,6 +369,16 @@ func (c *GateClient) FactorToKeep() *attest.FactorBlob {
 		return nil
 	}
 	return resp.Keep
+}
+
+// KeyboardToKeep implements attest.KeyboardBackend: the coordinator's. Only in the session that hands
+// a salt over, on the booted system; never at boot.
+func (c *GateClient) KeyboardToKeep() *attest.KeyboardKeep {
+	resp, err := c.ask(&gateRequest{Op: gateOpKeyboardKeep})
+	if err != nil {
+		return nil
+	}
+	return resp.KeepKeyboard
 }
 
 // TakeRelease implements attest.FactorBackend: the coordinator's TPM opens it.

@@ -474,7 +474,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 		}
 	}()
 	salt := []byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-	key, err := DiskKey(func(string, Recipe) []byte { return append([]byte(nil), salt...) }, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
+	key, err := DiskKey(func(string, Recipe) []byte { return append([]byte(nil), salt...) }, nil, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +506,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	}
 	// Without a salt from the phone: the recovery recipe (0x1100) variant, a typed
 	// salt, said so at the prompt.
-	key, err = DiskKey(func(string, Recipe) []byte { return nil }, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
+	key, err = DiskKey(func(string, Recipe) []byte { return nil }, nil, nil, recipeOf(RecipePhoneSalt), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatalf("without a salt from the phone: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 	// The salt in this TPM: asked of the TPM's part for this volume and
 	// recipe, the password typed.
 	var asked Recipe
-	key, err = DiskKey(func(_ string, r Recipe) []byte { asked = r; return append([]byte(nil), salt...) }, nil, recipeOf(RecipeTPMSalt), ConsoleAsk)("cryptroot")
+	key, err = DiskKey(func(_ string, r Recipe) []byte { asked = r; return append([]byte(nil), salt...) }, nil, nil, recipeOf(RecipeTPMSalt), ConsoleAsk)("cryptroot")
 	if err != nil || asked != RecipeTPMSalt {
 		t.Fatalf("the TPM's salt: %v (asked for %v)", err, asked)
 	}
@@ -559,7 +559,7 @@ func TestDiskKeyCombinesWithTheFactor(t *testing.T) {
 			drained = true
 		}
 	}
-	if _, err := DiskKey(func(string, Recipe) []byte { return append([]byte(nil), salt...) }, nil, recipeOf(), ConsoleAsk)("cryptroot"); !errors.Is(err, ErrUnlockSkipped) {
+	if _, err := DiskKey(func(string, Recipe) []byte { return append([]byte(nil), salt...) }, nil, nil, recipeOf(), ConsoleAsk)("cryptroot"); !errors.Is(err, ErrUnlockSkipped) {
 		t.Fatalf("no keyslot of ours: %v", err)
 	}
 	select {
@@ -633,7 +633,7 @@ func TestDiskKeyPasswordSaltMode(t *testing.T) {
 			}()
 		}
 	}()
-	key, err := DiskKey(func(string, Recipe) []byte { return nil }, nil, recipeOf(RecipeRecovery), ConsoleAsk)("cryptroot")
+	key, err := DiskKey(func(string, Recipe) []byte { return nil }, nil, nil, recipeOf(RecipeRecovery), ConsoleAsk)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -874,7 +874,7 @@ func TestDiskKeyAfterARefusingVault(t *testing.T) {
 		notes = append(notes, what+": "+note)
 		return []byte("typed " + what), nil
 	}
-	key, err := DiskKey(func(string, Recipe) []byte { return nil },
+	key, err := DiskKey(func(string, Recipe) []byte { return nil }, nil,
 		func(string) ([]byte, error) { return nil, refused },
 		recipeOf(RecipeUnattendedVaultPepper, RecipeRecovery), ask)("cryptroot")
 	if err != nil {

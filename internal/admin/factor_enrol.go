@@ -37,6 +37,10 @@ type FactorEnrolOptions struct {
 	AdapterWait time.Duration
 	Yes         bool // the recovery keyslot exists, no question asked
 	Debug       bool
+	// Keyboard: the phone keeps a salt typed through its one-time keyboard, of KeyboardLength
+	// characters (0: the default), and shows the keys to press at every boot.
+	Keyboard       bool
+	KeyboardLength int
 }
 
 // FactorEnrol gives the enrolled phone a factor to keep and derives the
@@ -79,7 +83,11 @@ func FactorEnrol(o FactorEnrolOptions) error {
 		fmt.Println("captured the old salt.")
 		fmt.Println()
 	}
-	fmt.Println("Then: tpm2-kira luks mark <device> --keyslot N --salt phone. The mark")
+	mark := "--salt phone"
+	if o.Keyboard {
+		mark += " --keyboard"
+	}
+	fmt.Printf("Then: tpm2-kira luks mark <device> --keyslot N %s. The mark\n", mark)
 	fmt.Println("is all the boot needs: it reads the recipe from the header, and once the phone has")
 	fmt.Println("verified the machine, asks for the password and derives this key. The recovery")
 	fmt.Println("passphrase in its own keyslot stays the way in without the phone: at cryptsetup's")
@@ -151,12 +159,31 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		fmt.Printf("Release key created for slot %d, under the slot's policy\n", slot)
 	}
 
-	f, w, err := phonegate.WrapFactor(tpmDev, att, nil)
-	if err != nil {
-		return nil, 0, err
+	var want []byte
+	var keepFactor *attest.FactorBlob
+	var keepKeyboard *attest.KeyboardKeep
+	if o.Keyboard {
+		n := o.KeyboardLength
+		if n == 0 {
+			n = attest.KeyboardDefaultLength
+		}
+		salt, err := attest.NewKeyboardSalt(nil, n)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer wipe.Bytes(salt)
+		want = phonegate.FactorSalt(salt, label)
+		p := &sealed.Payload
+		keepKeyboard = &attest.KeyboardKeep{Salt: append([]byte(nil), salt...), ReleaseKeyPublic: att.ReleaseKeyPublic, SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef, Label: label}
+	} else {
+		f, w, err := phonegate.WrapFactor(tpmDev, att, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer wipe.Bytes(f)
+		want = phonegate.FactorSalt(f, label)
+		keepFactor = &attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label}
 	}
-	defer wipe.Bytes(f)
-	want := phonegate.FactorSalt(f, label)
 	defer wipe.Bytes(want)
 
 	// The phone keeps the credential in an ordinary check of the booted
@@ -170,7 +197,11 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	}
 	// The boot is closed here: the channel's secrets open with the signing key.
 	svc := phonegate.NewGateServiceOpening(phonegate.OpenChannelSigned(priv), tpmDev, idx, pubKeyPath, o.Debug)
-	svc.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label})
+	if keepKeyboard != nil {
+		svc.KeepKeyboard(keepKeyboard)
+	} else {
+		svc.Keep(keepFactor)
+	}
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
 	fmt.Println("to keep the phone salt (no code: after boot the boot key is locked). Continue")
 	fmt.Println("to keep it.")
@@ -179,8 +210,13 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if code != 0 || !svc.Returned() {
 		return nil, 0, fmt.Errorf("the phone did not return the phone salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
 	}
-	fmt.Println("The phone keeps the phone salt and gave it back unchanged. This TPM opens it at")
-	fmt.Println("the next boot, under the slot's policy; the boot log says so.")
+	if o.Keyboard {
+		fmt.Println("The phone keeps the salt. From the next boot on it shows the keys to press at the")
+		fmt.Println("machine, different every time; this TPM opens the keyboard under the slot's policy.")
+	} else {
+		fmt.Println("The phone keeps the phone salt and gave it back unchanged. This TPM opens it at")
+		fmt.Println("the next boot, under the slot's policy; the boot log says so.")
+	}
 
 	pw, err := terminalPassword("Password for the disk (the factor's other half): ")
 	if err != nil {

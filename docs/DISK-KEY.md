@@ -35,6 +35,8 @@ vault), flag `0x01` the pepper.
 | `0x1400` password typed, salt from the vault | `--salt vault` | the vault releases the salt while the code screen holds; the password is asked after it |
 | `0x1401` ... with a pepper | `--salt vault --pepper` | the same, once an operator approved with the pepper |
 | `0x1300` password typed, salt from the phone | `--salt phone` | the phone verifies the boot and hands back the salt, the TPM opens it; the password is asked after the code screen |
+| `0x1302` password typed, salt typed through the phone's one-time keyboard | `--salt phone --keyboard` | the phone verifies the boot, the TPM opens this boot's keyboard, the phone shows the keys to press; the password and the keys are asked after the code screen |
+| `0x1402`, `0x1403` the same through the vault's, with a pepper after the keys | `--salt vault --keyboard [--pepper]` | the vault shows the keys (its CLI, its REST API) and is told they are right; an operator then approves with the pepper |
 | `0x1200` password typed, salt in this TPM | `--salt tpm` | the TPM opens the salt while the code screen holds; the password is asked after it |
 | `0x1100` recovery: password and salt typed | `--salt typed` | both are asked at tpm2-kira's prompt |
 
@@ -289,6 +291,49 @@ sudo tpm2-kira luks enrol /dev/sda2 --salt vault --pepper --url https://vault:84
 
 Setting up both sides, the protocol, the vault's rules and recovery:
 [VAULT.md](VAULT.md).
+
+## The salt typed through a one-time keyboard (`0x1302`, `0x1402`, `0x1403`)
+
+For a person who wants the salt typed at the machine, and no recording of that to be of use. The
+phone or the vault holds the salt and acts only on a good attestation, but it does not hand the salt
+over: for this boot alone it draws a mapping, sends it over the secure channel, and shows the person
+the keys to press. The machine applies the mapping to what is typed, and has the salt.
+
+```mermaid
+sequenceDiagram
+    participant U as You
+    participant V as Phone or vault
+    participant K as run (initrd)
+    participant T as TPM
+    K->>V: attestation
+    V->>V: the check; a fresh pad; keys = salt + pad
+    V->>K: the pad, wrapped for this TPM and the slot's release key
+    K->>T: ActivateCredential, before the close
+    V-->>U: the keys to press (phone's screen; vault's CLI or REST)
+    U->>K: the password, then the keys
+    K->>K: salt = keys - pad; Argon2id(password, salt)
+```
+
+- **Enrolled** with `luks enrol <device> --salt phone --keyboard`, or `--salt vault --keyboard`,
+  `--keyboard-length N` from 8 (the default) to 32. The machine draws the salt, from 30 characters
+  that keyboards agree on and nobody mistakes, derives the keyslot's key, and hands the salt over
+  once: inside the Noise session, or over the vault's TLS.
+- **The mapping is one per position**, the key at position i being `salt[i] + pad[i]`, and not one
+  table: a table would show which of the salt's characters repeat, the same way in every recording.
+  So the keys are uniformly random, and a recording of them says nothing.
+- **The keys are checked where they can be.** The vault is told by an HMAC under a key only this TPM
+  opened (`POST /v1/keyboard`), three wrong end the request, and a pepper comes after the right ones,
+  under that key: the TPM is closed by then. The phone hears nothing back: wrong keys of the right
+  form make a key that opens nothing, and cryptsetup's retry asks again.
+- **Without the phone or the vault**: the recovery recipe, then cryptsetup's own prompt, as for every
+  device-held salt.
+
+**WARNING: what it gives up against the salts above, for its keyslot alone.** The phone or the vault
+holds this salt and can read it, encrypted at rest (the keystore, the vault's TPM) and in the clear in
+memory while it works out the keys; `0x1300` and `0x1400` keep something neither can open. A salt of 8
+characters has about 39 bits, the others 256, so a stolen disk rests more on the password and
+Argon2id's cost. It protects the salt and not the password, which is typed in the clear; a machine
+compromised while attested sees keys and mapping together. `docs/SECURITY-BACKGROUND.md` §13.5b.
 
 ## The route: where the initrd takes the key from
 

@@ -117,6 +117,7 @@ runs when named in `--only`:
 | `debian-resume` | Debian: the hibernation and the resume; its kernel refuses the image in most runs |
 | `vault-alone` | the unattended recipe, Secure Boot on: a boot nobody touches, the vault alone |
 | `typed-vault` | the operator-approved typed vault (0x1401), Secure Boot on |
+| `keyboard-vault` | the salt typed through the vault's one-time keyboard, with a pepper (0x1403): two boots with other keys, wrong keys, the pepper after them, Secure Boot on |
 | `V3` | Arch: the resume with tpm2-kira masked, the close alone |
 | `V6` | `control` on unencrypted swap |
 | `no-tpm` | V4 step 5: a boot with no TPM at all |
@@ -236,7 +237,7 @@ Each scenario starts with the typed boot, from the setup. `--only setup` runs th
 None of these is a final proof, and their reports' first lines say so.
 
 **With Secure Boot on** there is a setup of its own: the scenarios `tpm-salt`, `vault-pepper`, `revoked`,
-`vault-alone`, `typed-vault` and `firmware-refuses` start from the snapshot `setup-secure`.
+`vault-alone`, `typed-vault`, `keyboard-vault` and `firmware-refuses` start from the snapshot `setup-secure`.
 
 ```bash
 tools/secureboot-vm.py both       # only the snapshot secureboot: real keys in the firmware, no tpm2-kira
@@ -326,7 +327,7 @@ CA's slots (signed on Arch, 8 and 9 on Debian), and the boot's log has no error.
 a token, enrols with a pepper, rebuilds the image; a boot nobody touches waits for an operator, is
 approved first with a wrong pepper, then with the right one; what the vault shows of Secure Boot, from
 the quote. `revoked`: the screen and the prompt say the vault gave no key and the recovery recipe's
-keyslot is the fallback, typed over SSH; then unrevoked. Under `--all`, `vault-alone` and `typed-vault`.
+keyslot is the fallback, typed over SSH; then unrevoked. Under `--all`, `vault-alone`, `typed-vault` and `keyboard-vault`.
 
 **Hibernation** (`tools/hibernatetest.py`'s docstring has the steps): one hibernation of the typed boot,
 kept as a snapshot; the resume over SSH; suspend to RAM; the failure path from it.

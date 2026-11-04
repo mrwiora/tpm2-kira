@@ -40,7 +40,7 @@ Contents: [1 The idea](#1-the-idea) ·
 [7 The machine's side](#7-the-machines-side) ·
 [8 The protocol](#8-the-protocol) · [9 Threats](#9-threats) ·
 [10 The code](#10-the-code) · [11 Tests](#11-tests) ·
-[12 Operator approval and the pepper](#12-operator-approval-and-the-pepper) · [13 Known limits](#13-known-limits)
+[12 Operator approval and the pepper](#12-operator-approval-and-the-pepper) · [12a The one-time keyboard](#12a-the-one-time-keyboard) · [13 Known limits](#13-known-limits)
 
 ## 1. The idea
 
@@ -613,6 +613,17 @@ with `--pepper` is released only on an approval that carries the pepper,
 and its key cannot be made without it - not by the machine, not by
 whoever holds the vault. What the machine and the vault do with it is in
 §5 and §6.1.
+
+## 12a The one-time keyboard
+
+A device enrolled with `--keyboard` (recipes `0x1402`, `0x1403`; [DISK-KEY.md](DISK-KEY.md#the-salt-typed-through-a-one-time-keyboard-0x1302-0x1402-0x1403))
+keeps a salt, not R: encrypted the same way, but the vault can read it. A verified release answers
+`keyboard`: this boot's pad under a fresh key K, K wrapped for the TPM. The keys to press are in
+`tpm2-kira-vault requests` and in `keys` of `GET /v1/requests`, and nowhere in the audit. The machine
+proves what was typed with an HMAC under K at `POST /v1/keyboard`, which answers `released`, `pending`
+(the pepper is awaited: the same request again), `wrong_keys` or `denied`, after three wrong. A device
+in approve mode is approved first; with a pepper the keys come first, and `request approve` takes the
+pepper only after them. The pepper then comes under K, since the machine's TPM is closed by then.
 
 ## 13. Known limits
 

@@ -625,10 +625,10 @@ keyscript asks at askpass directly.
 	"vault": vaultUsage,
 
 	"luks": `tpm2-kira luks status [<device>…] [--json]
-tpm2-kira luks enrol  <device> [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [options]
+tpm2-kira luks enrol  <device> [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [--keyboard] [options]
 tpm2-kira luks remove <device> --keyslot N
 tpm2-kira luks route  [<device>…] [--cmdline FILE]… [--crypttab FILE] [--json]
-tpm2-kira luks mark   <device> --keyslot N [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [options]
+tpm2-kira luks mark   <device> --keyslot N [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [--keyboard] [options]
 tpm2-kira luks derive --out PATH
 
 tpm2-kira's LUKS keyslots. A keyslot's key is always the combiner's
@@ -642,6 +642,10 @@ TPM, 3 the phone, 4 the vault), flag 0x01 the vault's pepper:
   0x1300  --salt phone                     password typed, salt from the phone
   0x1400  --salt vault                     password typed, salt from the vault
   0x1401  --salt vault --pepper            ... with an operator's pepper
+  0x1302  --salt phone --keyboard          the salt typed through the phone's one-time keyboard:
+                                           it holds the salt, and shows other keys at every boot
+  0x1402  --salt vault --keyboard          ... the vault's (tpm2-kira-vault requests, its REST API)
+  0x1403  --salt vault --pepper --keyboard ... with an operator's pepper, after the keys
   0x2400  --password tpm --salt vault      unattended: this TPM and the vault
   0x2401  --password tpm --salt vault --pepper
 

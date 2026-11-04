@@ -138,6 +138,8 @@ type board struct {
 	phone func() (phonegate.GateStatus, bool)
 	// salt is the salt the phone released, once it has; nil without a phone.
 	salt func() []byte
+	// phoneKeyboard is the one-time keyboard the phone released, once it has.
+	phoneKeyboard func() diskkey.KeyboardSession
 	// expectRelease tells the gate that a salt is wanted after the receipt;
 	// nil without a phone.
 	expectRelease func(bool)
@@ -146,6 +148,8 @@ type board struct {
 	// nil without one.
 	vaultKey  func(volume string) ([]byte, error)
 	vaultSalt func(volume string, r diskkey.Recipe) []byte
+	// vaultKeyboard is the one-time keyboard the vault gave for a volume.
+	vaultKeyboard func(volume string, r diskkey.Recipe) diskkey.KeyboardSession
 	// tpmSalt is the part T of a slot's TPM salt, opened while the code
 	// screen held; nil without one.
 	tpmSalt func(slot int) []byte
@@ -199,6 +203,19 @@ func (p *phonePart) start(bd *board) {
 			time.Sleep(200 * time.Millisecond)
 		}
 		return svc.Salt()
+	}
+	bd.phoneKeyboard = func() diskkey.KeyboardSession {
+		for {
+			st, _ := svc.Status()
+			if !st.Releasing {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if k := svc.KeyboardSession(); k != nil {
+			return k
+		}
+		return nil
 	}
 }
 
@@ -313,7 +330,7 @@ func (p *vaultPart) start(bd *board) {
 	if keys == nil {
 		return
 	}
-	bd.vaultKey, bd.vaultSalt = keys.ForVolume, keys.SaltFor
+	bd.vaultKey, bd.vaultSalt, bd.vaultKeyboard = keys.ForVolume, keys.SaltFor, keys.KeyboardFor
 	p.done = keys.Ready()
 	go func() {
 		select {
@@ -446,8 +463,17 @@ func (p *unlockPart) start(bd *board) {
 		}
 		return nil
 	}
+	keyboard := func(volume string, r diskkey.Recipe) diskkey.KeyboardSession {
+		switch {
+		case r.FromPhone() && bd.phoneKeyboard != nil:
+			return bd.phoneKeyboard()
+		case r.FromVault() && bd.vaultKeyboard != nil:
+			return bd.vaultKeyboard(volume, r)
+		}
+		return nil
+	}
 	recipes := &diskkey.UnlockRecipe{}
-	p.unlock = diskkey.ServeUnlock(l, diskkey.DiskKey(salt, bd.vaultKey, recipes.ForVolume, bd.ask), diskkey.UnlockLogger(bd.debug))
+	p.unlock = diskkey.ServeUnlock(l, diskkey.DiskKey(salt, keyboard, bd.vaultKey, recipes.ForVolume, bd.ask), diskkey.UnlockLogger(bd.debug))
 	bd.serving = true
 	bd.prompting = p.unlock.Prompting
 }

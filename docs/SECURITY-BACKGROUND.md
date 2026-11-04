@@ -1605,6 +1605,23 @@ the machine's prompt comes when the vault refuses, as for any other refusal.
 **What it rests on, in the vault's case too:** the firmware's measurement. On the VMs a real
 `on` has now gone through it, keys in the firmware (§17.2).
 
+### 13.5b The one-time keyboard: what it gives up
+
+The salt typed through a one-time keyboard ([DISK-KEY.md](DISK-KEY.md)) answers a recording of the
+keyboard, which a salt typed in the clear (`0x1100`) does not. Its keys are uniformly random under a
+fresh pad per boot, so nothing of the salt is in them, not even which characters repeat. The pad is
+wrapped for the TPM and the slot's release key, on top of the channel, so keys alone or pad alone are
+worth nothing.
+
+It is no stronger salt. **The holder can read it:** a stolen phone with its keystore unlocked, or a
+vault's memory, gives the salt, where `0x1300` and `0x1400` give what only this TPM opens. **It is
+short:** 8 characters of 30 are about 39 bits, so at Argon2id's second a guess a stolen disk costs some
+17 000 years of one machine per password guessed, far from 256 bits and much too little alone: the
+password carries the rest. **The password is still typed in the clear**, and a recording has that. **A
+machine compromised while attested** sees keys and mapping together. Tests: `TestKeyboardKeysSayNothing`,
+`TestPhoneKeyboard`, `TestPhoneKeyboardRefusesAnotherKey`, `TestPhoneKeyboardOnATPM`,
+`TestVaultKeyboardOnATPM`, the vault's `TestKeyboard*`.
+
 ### 13.5a Whether the quote covers the initrd
 
 The bind screen says whether the checked PCRs measure the initrd, the place a passphrase

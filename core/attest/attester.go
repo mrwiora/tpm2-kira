@@ -209,6 +209,9 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 	fb, _ := be.(FactorBackend)
 	if fb != nil {
 		ev.FactorKeep = fb.FactorToKeep()
+		if kb, ok := be.(KeyboardBackend); ok {
+			ev.KeyboardKeep = kb.KeyboardToKeep()
+		}
 	}
 	evlog, _ := be.Eventlog()
 	var evlogHash []byte
@@ -287,7 +290,7 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 			switch {
 			case res.Receipt == nil || !res.Check.Authentic || res.Check.Ack != AckAccepted:
 				ack = &ReleaseAck{Status: ReleaseNoReceipt, Message: "no accepted receipt before the release"}
-			case fb != nil && r.Kind == ReleaseKindFactor:
+			case fb != nil && (r.Kind == ReleaseKindFactor || r.Kind == ReleaseKindKeyboard):
 				res.Release = r
 				ack.Status, ack.Message = fb.TakeRelease(r)
 			}

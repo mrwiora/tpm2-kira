@@ -63,6 +63,9 @@ type MachineRecord struct {
 	// kept since the person accepted a verdict whose evidence carried it,
 	// and returned after every trusted receipt. The phone cannot open it.
 	Factor *FactorRecord `json:"factor,omitempty"`
+	// Keyboard is a salt typed through the keyboard (keyboard.go), kept the same way. Unlike the
+	// factor the phone can read it: it must work out the keys to press. Never beside a factor.
+	Keyboard *KeyboardRecord `json:"keyboard,omitempty"`
 }
 
 // FactorRecord is a kept FactorBlob with when it was kept.
@@ -132,6 +135,7 @@ type Event struct {
 	Code          uint16         `json:"code,omitempty"`
 	Result        uint8          `json:"result,omitempty"`
 	Message       string         `json:"message,omitempty"`
+	Keys          string         `json:"keys,omitempty"` // EvKeyboardKeys
 	Warnings      []string       `json:"warnings,omitempty"`
 
 	// need_anchor_key: what the phone learnt about the machine before the
@@ -165,6 +169,7 @@ const (
 	EvReceiptAck    = "receipt_ack"     // what the machine made of the receipt
 	EvRecordUpdated = "record_updated"  // persist Record (replaces the stored one)
 	EvReleaseAck    = "release_ack"     // what the machine made of the released factor
+	EvKeyboardKeys  = "keyboard_keys"   // the keys to press at the machine, for this boot alone
 	EvDone          = "done"            // session finished normally; disconnect
 	EvError         = "error"           // session failed; disconnect
 )
@@ -263,15 +268,18 @@ type Verifier struct {
 	verdict  *Verdict
 	qd       []byte
 
-	bootPoint   []byte      // enrolment: the checked boot key, to be pinned
-	signingName []byte      // enrolment: the signing key behind its policy
-	bootSecret  *BootSecret // attestation: this session's code and proof key
-	receipt     *Receipt
-	remember    bool
-	factorKeep  *FactorBlob // attestation: the factor the evidence asked to keep
-	evlog       []byte
-	evlogSum    []byte
-	evlogTot    uint32
+	bootPoint    []byte      // enrolment: the checked boot key, to be pinned
+	signingName  []byte      // enrolment: the signing key behind its policy
+	bootSecret   *BootSecret // attestation: this session's code and proof key
+	receipt      *Receipt
+	remember     bool
+	factorKeep   *FactorBlob   // attestation: the factor the evidence asked to keep
+	keyboardKeep *KeyboardKeep // attestation: the salt the evidence asked to keep
+	keyboardName []byte        // and its release key's Name, checked
+	keys         []byte        // the keys to press in this session, once the machine took the pad
+	evlog        []byte
+	evlogSum     []byte
+	evlogTot     uint32
 }
 
 func (c *VerifierConfig) now() time.Time {
@@ -821,8 +829,14 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 		// matching boot waits for their go-ahead, after they compared the
 		// code with the machine's screen.
 		v.factorKeep = ev.FactorKeep
+		v.keyboardKeep = ev.KeyboardKeep
+		if k := ev.KeyboardKeep; k != nil {
+			if v.keyboardName, err = checkKeyboardKeep(k, v.record.SigningKeyName); err != nil {
+				return v.fail(out, ErrCodeProtocol, "the salt to keep: "+err.Error())
+			}
+		}
 		v.state = vsWaitDecision
-		out.Events = append(out.Events, Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil, NeedsDecision: true, FactorOffered: ev.FactorKeep != nil})
+		out.Events = append(out.Events, Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil, NeedsDecision: true, FactorOffered: ev.FactorKeep != nil || ev.KeyboardKeep != nil})
 		return out, nil
 
 	case vsWaitDecision, vsWaitReceiptSig, vsWaitReceiptAck, vsWaitReleaseAck:
@@ -840,6 +854,9 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 				out.Events = append(out.Events, Event{Type: EvRecordUpdated, Record: v.record})
 				// The factor goes out only after a trusted receipt the
 				// machine accepted: the TPM decides whether it opens.
+				if ack.Result == AckAccepted && v.record.HasKeyboard() {
+					return v.sendKeyboard(out)
+				}
 				if ack.Result == AckAccepted && v.record.HasFactor() {
 					return v.sendRelease(out)
 				}
@@ -852,10 +869,46 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 				return v.fail(out, ErrCodeProtocol, err.Error())
 			}
 			out.Events = append(out.Events, Event{Type: EvReleaseAck, Result: ack.Status, Message: ack.Message})
+			// The keys only once the TPM opened the pad, and not in the session that handed the
+			// salt over: nothing is asked for there.
+			if ack.Status == ReleaseOK && v.keys != nil && v.keyboardKeep == nil {
+				out.Events = append(out.Events, Event{Type: EvKeyboardKeys, Keys: string(v.keys)})
+			}
+			clear(v.keys)
+			v.keys = nil
 			return v.bye(out)
 		}
 	}
 	return v.fail(out, ErrCodeProtocol, "unexpected "+d.Type.String())
+}
+
+// sendKeyboard hands the machine this boot's pad, wrapped for its TPM and the slot's release key,
+// and keeps the keys to show.
+func (v *Verifier) sendKeyboard(out *Output) (*Output, error) {
+	k := v.record.Keyboard
+	secret := make([]byte, KeyboardSecretSize)
+	defer clear(secret)
+	if _, err := io.ReadFull(v.cfg.rng(), secret); err != nil {
+		return v.fail(out, ErrCodeProtocol, err.Error())
+	}
+	pad, err := KeyboardPadFrom(secret, len(k.Salt))
+	if err != nil {
+		return v.fail(out, ErrCodeProtocol, err.Error())
+	}
+	defer clear(pad)
+	if v.keys, err = KeyboardKeys(k.Salt, pad); err != nil {
+		return v.fail(out, ErrCodeProtocol, err.Error())
+	}
+	blob, enc, err := MakeCredential(v.cfg.rng(), v.record.EKPub, k.ReleaseKeyName, secret)
+	if err != nil {
+		return v.fail(out, ErrCodeProtocol, "wrapping the keyboard for the TPM: "+err.Error())
+	}
+	b, err := (&Release{Kind: ReleaseKindKeyboard, Slot: v.record.Slot, CredentialBlob: blob, EncryptedSecret: enc, Label: k.Label}).Encode()
+	if err := v.send(out, b, err); err != nil {
+		return v.fail(out, ErrCodeProtocol, err.Error())
+	}
+	v.state = vsWaitReleaseAck
+	return out, nil
 }
 
 // sendRelease hands the machine its kept factor.
@@ -1048,7 +1101,12 @@ func (v *Verifier) updateRecord() {
 	}
 	r.FirmwareVersion = v.verdict.FirmwareVersion
 	r.LastAttested = &now
+	if k := v.keyboardKeep; k != nil {
+		r.Keyboard = &KeyboardRecord{Salt: k.Salt, ReleaseKeyName: v.keyboardName, Label: k.Label, KeptAt: now}
+		r.Factor = nil
+	}
 	if f := v.factorKeep; f != nil {
+		r.Keyboard = nil
 		r.Factor = &FactorRecord{CredentialBlob: f.CredentialBlob, EncryptedSecret: f.EncryptedSecret, Label: f.Label, KeptAt: now}
 	}
 	if v.verdict.Profile != "" {
