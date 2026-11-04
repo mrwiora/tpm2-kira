@@ -149,6 +149,8 @@ type Event struct {
 	InitrdDetail    string `json:"initrd_detail,omitempty"`
 	// SecureBoot is what the baseline quote and the event log establish.
 	SecureBoot *SecureBootFinding `json:"secure_boot,omitempty"`
+	// SHA1Bank says the baseline quote is on the SHA-1 bank: a warning, it decides nothing.
+	SHA1Bank bool `json:"sha1_bank,omitempty"`
 }
 
 // Event types.
@@ -548,6 +550,7 @@ func (v *Verifier) handleEnrol(out *Output, d *Decoder) (*Output, error) {
 			Type: EvNeedAnchorKey, DeviceID: v.offer.DeviceID, FriendlyName: v.offer.FriendlyName,
 			EKVerifiedBy: v.ekBy, EKNote: v.ekNote, EKVendorUnknown: v.ekVendorUnknown, InitrdCoverage: initrd.State, InitrdPCRs: initrd.PCRs, InitrdDetail: initrd.Detail,
 			SecureBoot:           &v.baseVer.SecureBoot,
+			SHA1Bank:             v.baseVer.SHA1Bank,
 			AttestationChallenge: AnchorAttestationChallenge(v.sess.ChannelBinding()),
 		})
 		return out, nil
@@ -652,7 +655,8 @@ func (v *Verifier) checkOffer(o *EnrolOffer) error {
 		PCRAlg:    o.Selection.Alg,
 		PCRValues: o.PCRValues,
 
-		BootContext: o.BootContext,
+		BootContext:     o.BootContext,
+		SecureBootQuote: o.SecureBootQuote,
 	}
 	verdict := Verify(ev, pol, pin, EnrolQualifyingData(v.sess.ChannelBinding()), v.cfg.now())
 	if verdict.State != StateMatch {

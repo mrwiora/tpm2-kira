@@ -39,6 +39,11 @@ type SoftTPM struct {
 	Evlog      []byte
 	// PCR7Chain is what the machine says of PCR 7's events (SetSecureBoot).
 	PCR7Chain []byte
+	// PCRsSHA1 is the SHA-1 bank, all zero but for what it holds; PCR7ChainSHA256 the
+	// SHA-256 digests beside a quote on it; NoSHA256Bank a TPM that refuses to quote that bank.
+	PCRsSHA1        map[uint8][]byte
+	PCR7ChainSHA256 []byte
+	NoSHA256Bank    bool
 	// Initrd is what it says of the initrd's events, at enrolment (SetInitrd).
 	Initrd attest.InitrdEvents
 
@@ -218,9 +223,18 @@ func (s *SoftTPM) Extend(idx uint8, data string) {
 
 // Quote implements attest.AttesterBackend.
 func (s *SoftTPM) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
+	if s.NoSHA256Bank && sel.Alg == attest.AlgSHA256 {
+		return nil, errors.New("no SHA-256 bank")
+	}
 	var vals []attest.PCRValue
 	for _, i := range sel.Indices {
-		vals = append(vals, attest.PCRValue{Index: i, Digest: append([]byte(nil), s.PCRs[i]...)})
+		v := s.PCRs[i]
+		if sel.Alg == attest.AlgSHA1 {
+			if v = s.PCRsSHA1[i]; v == nil {
+				v = make([]byte, 20)
+			}
+		}
+		vals = append(vals, attest.PCRValue{Index: i, Digest: append([]byte(nil), v...)})
 	}
 	att := tpm2.TPMSAttest{
 		Magic:           tpm2.TPMGeneratedValue,
@@ -265,7 +279,7 @@ func (s *SoftTPM) signWith(key *ecdsa.PrivateKey, msg []byte) ([]byte, error) {
 
 // BootContext implements attest.AttesterBackend.
 func (s *SoftTPM) BootContext() attest.BootContext {
-	return attest.BootContext{BlobVersion: 8, NVRAMIndex: 0x01803010, PCR7Chain: s.PCR7Chain, SealPCRSelection: []uint8{0, 7}, UptimeMS: 4200}
+	return attest.BootContext{BlobVersion: 8, NVRAMIndex: 0x01803010, PCR7Chain: s.PCR7Chain, PCR7ChainSHA256: s.PCR7ChainSHA256, SealPCRSelection: []uint8{0, 7}, UptimeMS: 4200}
 }
 
 // SetSecureBoot boots the firmware in a state: PCR 7 and its events as that firmware
@@ -273,6 +287,18 @@ func (s *SoftTPM) BootContext() attest.BootContext {
 func (s *SoftTPM) SetSecureBoot(state string) {
 	s.PCR7Chain = SecureBootChain(attest.AlgSHA256, state)
 	s.PCRs[7] = ReplayChain(attest.AlgSHA256, s.PCR7Chain)
+}
+
+// SetSecureBootBothBanks boots the firmware in a state, measured in both banks, for a
+// selection on SHA-1: the log holds the SHA-1 digests only when sha1Logged.
+func (s *SoftTPM) SetSecureBootBothBanks(state string, sha1Logged bool) {
+	s.SetSecureBoot(state)
+	s.PCR7ChainSHA256, s.PCR7Chain = s.PCR7Chain, nil
+	sha1Chain := SecureBootChain(attest.AlgSHA1, state)
+	s.PCRsSHA1 = map[uint8][]byte{7: ReplayChain(attest.AlgSHA1, sha1Chain)}
+	if sha1Logged {
+		s.PCR7Chain = sha1Chain
+	}
 }
 
 // SecureBootChain is the chain of a firmware in a state: attest.SecureBootOn, Off or

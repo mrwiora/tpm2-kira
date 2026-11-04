@@ -202,6 +202,8 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 		BootContext: be.BootContext(),
 		AppVersion:  id.AppVersion,
 
+		SecureBootQuote: QuoteSecureBoot(be.Quote, qd, req.Selection),
+
 		BootKeyState:  bootState,
 		BootProof:     bootAnswer.Proof,
 		BootSignature: bootAnswer.Signature,
@@ -458,6 +460,8 @@ func ServeEnrolment(conn Conn, id *EnrolIdentity, be EnrolBackend, progress Prog
 		BootContext:  be.BootContext(),
 		AppVersion:   id.AppVersion,
 		AdvKey:       id.AdvKey,
+
+		SecureBootQuote: QuoteSecureBoot(be.Quote, EnrolQualifyingData(cb), id.Selection),
 	}
 	bk, err := be.BootKey(EnrolQualifyingData(cb))
 	if err != nil {

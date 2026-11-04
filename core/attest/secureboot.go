@@ -2,11 +2,15 @@ package attest
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"hash"
 	"unicode/utf16"
+
+	"github.com/google/go-tpm/tpm2"
 )
 
 // Secure Boot's state as a verifier establishes it: from the PCR 7 the TPM signed
@@ -41,6 +45,11 @@ import (
 // different or missing certificate does not match an approved value. A firmware's digest over
 // the variable's data alone, not UEFI_VARIABLE_DATA, is no event of any state: it stays
 // not established, as for go-attestation (docs/SECURITY-BACKGROUND.md, §13.5).
+//
+// A slot on the SHA-1 bank may have no SHA-1 events to replay: a firmware's log can hold
+// SHA-256 digests alone. So the machine also quotes sha256:7 under the same qualifying data
+// (SecureBootQuote), and the state is read from that where it is there. A machine that leaves
+// it out loses "on", nothing else: the SHA-1 events are then all there is.
 
 // SecureBootFinding is what a verifier established, for people: State is one of the
 // states below; Detail says why, for a state not established.
@@ -102,7 +111,7 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 	case len(pcr7) != size:
 		return notEstablished("the quote does not cover PCR 7")
 	case len(chain) == 0:
-		return notEstablished("the machine gave no events of PCR 7: no event log")
+		return notEstablished("the machine gave no events of PCR 7 in the " + bankName(alg) + " bank: no event log, or a log without that bank")
 	case len(chain) > MaxPCR7Chain || len(chain)%size != 0:
 		return notEstablished("the machine's events of PCR 7 are malformed")
 	}
@@ -166,6 +175,87 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 		return SecureBootFinding{State: SecureBootOff}
 	}
 	return notEstablished("the firmware's events of PCR 7 name no SecureBoot variable")
+}
+
+// bankName is a PCR bank in a sentence.
+func bankName(alg uint16) string {
+	if alg == AlgSHA1 {
+		return "SHA-1"
+	}
+	return "SHA-256"
+}
+
+// SecureBootQuote is a quote of sha256:7 beside a selection on the SHA-1 bank, by the same
+// attestation key and under the same qualifying data; PCR7 is the register's value, believed
+// only as far as it reproduces the quoted digest.
+type SecureBootQuote struct {
+	Quoted    []byte `json:"quoted"`
+	Signature []byte `json:"signature"`
+	PCR7      []byte `json:"pcr7"`
+}
+
+// secureBootSelection is what a SecureBootQuote covers, and all it may cover.
+func secureBootSelection() PCRSelection {
+	return PCRSelection{Alg: AlgSHA256, Indices: []uint8{7}}
+}
+
+// QuoteSecureBoot makes the SecureBootQuote for a quote over sel. Nil unless sel is on the
+// SHA-1 bank, and when the TPM has no SHA-256 bank to quote: that is not an error, the SHA-1
+// events are then what there is.
+func QuoteSecureBoot(quote func(qd []byte, sel PCRSelection) (*QuoteResult, error), qd []byte, sel PCRSelection) *SecureBootQuote {
+	if sel.Alg != AlgSHA1 {
+		return nil
+	}
+	q, err := quote(qd, secureBootSelection())
+	if err != nil || len(q.Values) != 1 || q.Values[0].Index != 7 {
+		return nil
+	}
+	return &SecureBootQuote{Quoted: q.Quoted, Signature: q.Signature, PCR7: q.Values[0].Digest}
+}
+
+// EstablishSecureBootOf is the state for a verified quote in the bank alg: from q and
+// chainSHA256 on the SHA-1 bank where q is there, else EstablishSecureBoot's. A q that does
+// not verify is not established: there is no going back to the weaker bank from it.
+func EstablishSecureBootOf(alg uint16, pcr7, chain []byte, ak crypto.PublicKey, qd []byte, q *SecureBootQuote, chainSHA256 []byte) SecureBootFinding {
+	if alg != AlgSHA1 || q == nil {
+		return EstablishSecureBoot(alg, pcr7, chain)
+	}
+	if err := checkSecureBootQuote(ak, qd, q); err != nil {
+		return notEstablished("the quote of sha256:7: " + err.Error())
+	}
+	return EstablishSecureBoot(AlgSHA256, q.PCR7, chainSHA256)
+}
+
+// checkSecureBootQuote says whether q is the TPM's word, for this session, on sha256:7.
+func checkSecureBootQuote(ak crypto.PublicKey, qd []byte, q *SecureBootQuote) error {
+	if ak == nil {
+		return errors.New("no attestation key to check it with")
+	}
+	if err := VerifyTPMSignature(ak, q.Quoted, q.Signature); err != nil {
+		return err
+	}
+	att, err := tpm2.Unmarshal[tpm2.TPMSAttest](q.Quoted)
+	if err != nil {
+		return errors.New("does not parse")
+	}
+	if att.Magic != tpm2.TPMGeneratedValue || att.Type != tpm2.TPMSTAttestQuote {
+		return errors.New("the signed structure is not a TPM quote")
+	}
+	if !bytes.Equal(att.ExtraData.Buffer, qd) {
+		return errors.New("not bound to this session")
+	}
+	info, err := att.Attested.Quote()
+	if err != nil {
+		return errors.New("no quote info")
+	}
+	sel := secureBootSelection()
+	if got, err := selectionFromTPM(info.PCRSelect); err != nil || !got.Equal(sel) {
+		return errors.New("covers another selection")
+	}
+	if len(q.PCR7) != sha256.Size || !bytes.Equal(CompositeDigest(sel, []PCRValue{{Index: 7, Digest: q.PCR7}}), info.PCRDigest.Buffer) {
+		return errors.New("the value does not reproduce the quoted digest")
+	}
+	return nil
 }
 
 // efiGlobalVariable is EFI_GLOBAL_VARIABLE, {8BE4DF61-93CA-11D2-AA0D-00E098032B8C}, as

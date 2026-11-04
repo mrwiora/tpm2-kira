@@ -38,6 +38,8 @@ func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, expectedQD []byte, n
 		return v.finish()
 	}
 
+	v.SHA1Bank = sel.Alg == AlgSHA1
+
 	if ev.Schema != SchemaVersion {
 		v.hard(ReasonMalformed, fmt.Sprintf("evidence schema %d, expected %d", ev.Schema, SchemaVersion))
 	}
@@ -129,7 +131,7 @@ func Verify(ev *Evidence, pol *Policy, pin *PinnedIdentity, expectedQD []byte, n
 
 	// From the verified quote's PCR 7, never from what the machine says: a state
 	// not established, the default above, is red like off.
-	v.SecureBoot = EstablishSecureBoot(sel.Alg, values[7], ev.BootContext.PCR7Chain)
+	v.SecureBoot = EstablishSecureBootOf(sel.Alg, values[7], ev.BootContext.PCR7Chain, akPub, expectedQD, ev.SecureBootQuote, ev.BootContext.PCR7ChainSHA256)
 
 	if pr, err := pol.MatchProfile(values, now); err == nil {
 		v.Profile = pr.Name
@@ -217,6 +219,8 @@ type Verdict struct {
 	// SecureBoot is what the quote and the event log establish (secureboot.go);
 	// anything but on is shown red, whatever State is. It decides nothing.
 	SecureBoot SecureBootFinding `json:"secure_boot"`
+	// SHA1Bank says the selection is on the SHA-1 bank: a warning, it decides nothing.
+	SHA1Bank bool `json:"sha1_bank,omitempty"`
 
 	ResetCount      uint32 `json:"reset_count"`
 	RestartCount    uint32 `json:"restart_count"`

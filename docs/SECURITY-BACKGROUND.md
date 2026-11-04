@@ -1544,6 +1544,16 @@ the digests of PCR 7's events the machine sends (the event log's, `pcr7_chain`),
    value (firmware that says its measurements went wrong): the digest of each is known, and
    go-attestation refuses both.
 
+**A slot on the SHA-1 bank** is a warning (`sha1_bank`), not a state: a firmware's log can hold
+SHA-256 digests alone, and "on" must still rest on what the TPM signed. So beside a selection on
+SHA-1 the machine also quotes `sha256:7` under the same qualifying data, with the same attestation
+key, and sends the SHA-256 digests (`attest.SecureBootQuote`). Phone and vault read the state from
+that; one that does not verify is `not_established`, with no going back to the weaker bank; a machine
+leaving it out loses `on` unless its log has SHA-1 events, and a machine able to forge those is the
+SHA-1 collision the warning is for. Tests: `TestSHA1SlotEstablishesSecureBoot`,
+`TestSecureBootQuoteMustVerify`, `TestReleaseOnSHA1EstablishesFromTheSecondQuote`,
+`TestSHA1SlotOnATPMWithBothBanks` (swtpm).
+
 **What one log of digests cannot show.** That a key verified anything: an
 `EV_EFI_VARIABLE_AUTHORITY` digest is of a certificate no verifier here holds. On the one real
 machine's log seen, a certificate that verified two binaries was measured once, after the

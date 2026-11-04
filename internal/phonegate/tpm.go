@@ -321,6 +321,8 @@ type TPMBackend struct {
 	// PCR7ChainData is the digests of PCR 7's events (PCR7Chain), once PCR7ChainRead.
 	PCR7ChainData []byte
 	PCR7ChainRead bool
+	// PCR7ChainSHA256Data is the same in the SHA-256 bank, read beside a slot on SHA-1.
+	PCR7ChainSHA256Data []byte
 }
 
 // Quote implements attest.AttesterBackend.
@@ -389,8 +391,11 @@ func (b *TPMBackend) BootContext() attest.BootContext {
 			alg = attest.AlgSHA1
 		}
 		b.PCR7ChainData = PCR7Chain(measure.DefaultEventlogPath, alg)
+		if alg == attest.AlgSHA1 {
+			b.PCR7ChainSHA256Data = PCR7Chain(measure.DefaultEventlogPath, attest.AlgSHA256)
+		}
 	}
-	bc.PCR7Chain = b.PCR7ChainData
+	bc.PCR7Chain, bc.PCR7ChainSHA256 = b.PCR7ChainData, b.PCR7ChainSHA256Data
 	return bc
 }
 

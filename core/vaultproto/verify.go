@@ -93,15 +93,16 @@ type Checked struct {
 	SecureBoot attest.SecureBootFinding
 }
 
-// establishSecureBoot reads Secure Boot's state from the verified values.
-func establishSecureBoot(sel Selection, vals []PCRValue, chain []byte) attest.SecureBootFinding {
+// establishSecureBoot reads Secure Boot's state from the verified values, under the
+// qualifying data qd.
+func establishSecureBoot(sel Selection, req *ReleaseRequest, ak crypto.PublicKey, qd []byte) attest.SecureBootFinding {
 	var pcr7 []byte
-	for _, v := range vals {
+	for _, v := range req.PCRValues {
 		if v.Index == 7 {
 			pcr7 = v.Value
 		}
 	}
-	return attest.EstablishSecureBoot(sel.Alg, pcr7, chain)
+	return attest.EstablishSecureBootOf(sel.Alg, pcr7, req.PCR7Chain, ak, qd, req.SecureBootQuote, req.PCR7ChainSHA256)
 }
 
 // VerifyRelease is the vault's check of one release request, against the
@@ -154,7 +155,8 @@ func VerifyRelease(dev *Device, nonce []byte, req *ReleaseRequest, minGeneration
 	if att.Magic != tpm2.TPMGeneratedValue || att.Type != tpm2.TPMSTAttestQuote {
 		return nil, errors.New("the signed structure is not a TPM quote")
 	}
-	if !bytes.Equal(att.ExtraData.Buffer, QualifyingData(req.DeviceID, req.RequestID, nonce)) {
+	qd := QualifyingData(req.DeviceID, req.RequestID, nonce)
+	if !bytes.Equal(att.ExtraData.Buffer, qd) {
 		return nil, errors.New("the quote is not for this challenge")
 	}
 	info, err := att.Attested.Quote()
@@ -179,7 +181,7 @@ func VerifyRelease(dev *Device, nonce []byte, req *ReleaseRequest, minGeneration
 		ResetCount:   att.ClockInfo.ResetCount,
 		RestartCount: att.ClockInfo.RestartCount,
 		Firmware:     att.FirmwareVersion,
-		SecureBoot:   establishSecureBoot(dev.Selection, req.PCRValues, req.PCR7Chain),
+		SecureBoot:   establishSecureBoot(dev.Selection, req, ak, qd),
 	}
 	if req.Generation < minGeneration {
 		return checked, fmt.Errorf("generation %d is older than %d: an approval a later one revoked", req.Generation, minGeneration)

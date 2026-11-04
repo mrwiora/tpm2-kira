@@ -959,7 +959,8 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 		}
 	}
 	be := &phonegate.TPMBackend{TPM: tpmDev, Blob: blob, SealIndex: nvslot.ResolveNVRAMIndex(sealIndex), Sealed: phonegate.ReadSealedSlot(tpmDev, nvslot.ResolveNVRAMIndex(sealIndex)), Debug: debug}
-	q, err := be.Quote(attest.OfflineQualifyingData(nonce), sel)
+	qd := attest.OfflineQualifyingData(nonce)
+	q, err := be.Quote(qd, sel)
 	if err != nil {
 		return err
 	}
@@ -973,6 +974,8 @@ func AttestQuote(tpmPath string, sealIndex uint32, nonceHex, pcrs, outPath strin
 		PCRValues:   q.Values,
 		BootContext: be.BootContext(),
 		AppVersion:  nvslot.AppVersion,
+
+		SecureBootQuote: attest.QuoteSecureBoot(be.Quote, qd, sel),
 	}
 	data, err := ev.Encode()
 	if err != nil {

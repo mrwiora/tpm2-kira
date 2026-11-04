@@ -271,3 +271,30 @@ func TestVerifyReleaseSignedPCR(t *testing.T) {
 		t.Fatal("a signed PCR outside the selection")
 	}
 }
+
+// A slot on the SHA-1 bank: the vault reads the state from the second quote, and a machine
+// leaving it out, with SHA-256 events alone, gets no "on".
+func TestReleaseOnSHA1EstablishesFromTheSecondQuote(t *testing.T) {
+	m := newMachine(t)
+	m.dev.Selection = Selection{Alg: uint16(tpm2.TPMAlgSHA1), Indices: []uint8{0, 7, 11}}
+	m.tpm.SetSecureBootBothBanks(attest.SecureBootOn, false)
+	id, nonce := "request", bytes.Repeat([]byte{2}, NonceSize)
+	sel := attest.PCRSelection{Alg: m.dev.Selection.Alg, Indices: m.dev.Selection.Indices}
+	req := m.request(t, id, nonce)
+	req.SecureBootQuote = attest.QuoteSecureBoot(m.tpm.Quote, QualifyingData(m.dev.DeviceID, id, nonce), sel)
+	req.PCR7ChainSHA256 = m.tpm.PCR7ChainSHA256
+	checked, _ := VerifyRelease(m.dev, nonce, req, 0)
+	if checked == nil || checked.SecureBoot.State != attest.SecureBootOn {
+		t.Fatalf("%+v", checked)
+	}
+	req.SecureBootQuote = nil
+	checked, _ = VerifyRelease(m.dev, nonce, req, 0)
+	if checked == nil || checked.SecureBoot.State != attest.SecureBootNotEstablished {
+		t.Fatalf("%+v", checked)
+	}
+	req.SecureBootQuote = attest.QuoteSecureBoot(m.tpm.Quote, QualifyingData(m.dev.DeviceID, "another", nonce), sel)
+	checked, _ = VerifyRelease(m.dev, nonce, req, 0)
+	if checked == nil || checked.SecureBoot.State != attest.SecureBootNotEstablished {
+		t.Fatalf("%+v", checked)
+	}
+}

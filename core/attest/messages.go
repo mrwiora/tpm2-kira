@@ -105,13 +105,16 @@ type BootContext struct {
 	MeasurePoint string
 	// PCR7Chain is the digests of PCR 7's events in the event log, concatenated,
 	// in the quote's bank; empty without a log.
-	PCR7Chain        []byte
+	PCR7Chain []byte
+	// PCR7ChainSHA256 is the same in the SHA-256 bank, beside a quote on SHA-1: what a
+	// SecureBootQuote is replayed with.
+	PCR7ChainSHA256  []byte
 	SealPCRSelection []uint8
 	UptimeMS         uint64
 }
 
 // maxBootContext bounds a BootContext on the wire.
-const maxBootContext = 2048 + MaxPCR7Chain
+const maxBootContext = 2048 + 2*MaxPCR7Chain
 
 func (b *BootContext) encode() *Encoder {
 	e := SubEncoder()
@@ -121,7 +124,24 @@ func (b *BootContext) encode() *Encoder {
 	e.OptBytes(4, b.PCR7Chain)
 	e.Bytes(5, b.SealPCRSelection)
 	e.U64(6, b.UptimeMS)
+	e.OptBytes(7, b.PCR7ChainSHA256)
 	return e
+}
+
+func (q *SecureBootQuote) encode(e *Encoder, quoted, signature, pcr7 uint16) {
+	if q != nil {
+		e.Bytes(quoted, q.Quoted)
+		e.Bytes(signature, q.Signature)
+		e.Bytes(pcr7, q.PCR7)
+	}
+}
+
+func decodeSecureBootQuote(d *Decoder, quoted, signature, pcr7 uint16) *SecureBootQuote {
+	q := d.Bytes(quoted, maxQuoted, false)
+	if q == nil {
+		return nil
+	}
+	return &SecureBootQuote{Quoted: q, Signature: d.Bytes(signature, maxTPMSig, true), PCR7: d.Fixed(pcr7, 32, true)}
 }
 
 func decodeBootContext(d *Decoder) BootContext {
@@ -135,6 +155,7 @@ func decodeBootContext(d *Decoder) BootContext {
 		PCR7Chain:        d.Bytes(4, MaxPCR7Chain, false),
 		SealPCRSelection: d.Bytes(5, MaxPCRIndex, false),
 		UptimeMS:         d.U64(6, false),
+		PCR7ChainSHA256:  d.Bytes(7, MaxPCR7Chain, false),
 	}
 }
 
@@ -230,6 +251,8 @@ type Evidence struct {
 	EventlogSize   uint32 // optional, 0 when unknown
 	BootContext    BootContext
 	AppVersion     string
+	// SecureBootQuote is there beside a quote on the SHA-1 bank (secureboot.go).
+	SecureBootQuote *SecureBootQuote
 	// BootKeyState says what the machine's TPM made of the boot challenge
 	// (BootKey* constants); BootProof is present when it released the key.
 	BootKeyState  uint8
@@ -278,6 +301,7 @@ func (m *Evidence) Encode() ([]byte, error) {
 			e.String(17, f.Label)
 		}
 	}
+	m.SecureBootQuote.encode(e, 18, 19, 20)
 	return e.Finish()
 }
 
@@ -300,6 +324,8 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 		BootKeyState:   d.U8(12, false),
 		BootProof:      d.Fixed(13, bootProofSize, false),
 		BootSignature:  d.Bytes(14, maxTPMSig, false),
+
+		SecureBootQuote: decodeSecureBootQuote(d, 18, 19, 20),
 	}
 	if cred := d.Bytes(15, maxCredential, false); cred != nil {
 		m.FactorKeep = &FactorBlob{
@@ -592,8 +618,10 @@ type EnrolOffer struct {
 	EventlogSHA256 []byte // optional
 	BootContext    BootContext
 	AppVersion     string
-	AdvKey         []byte // 32 bytes: lets the phone recognise this machine's advertisements
-	EKCertChain    []byte // optional: the TPM's intermediates for EKCert, concatenated DER
+	// SecureBootQuote is there beside a quote on the SHA-1 bank (secureboot.go).
+	SecureBootQuote *SecureBootQuote
+	AdvKey          []byte // 32 bytes: lets the phone recognise this machine's advertisements
+	EKCertChain     []byte // optional: the TPM's intermediates for EKCert, concatenated DER
 	// MeasurePointValues are the PCR values the machine expects at the boot
 	// check, where the gate quotes inside the initramfs. They differ from
 	// PCRValues, the running system's registers, for PCRs systemd extends
@@ -668,6 +696,7 @@ func (m *EnrolOffer) Encode() ([]byte, error) {
 	e.OptBytes(24, m.Initrd.PCR8Chain)
 	e.OptBytes(25, m.Initrd.PCR11Chain)
 	e.String(26, m.Initrd.Command)
+	m.SecureBootQuote.encode(e, 27, 28, 29)
 	return e.Finish()
 }
 
@@ -700,6 +729,7 @@ func DecodeEnrolOffer(d *Decoder) (*EnrolOffer, error) {
 		PolicyRef:         d.Bytes(23, 64, true),
 		Initrd: InitrdEvents{PCR8Chain: d.Bytes(24, MaxInitrdChain, false), PCR11Chain: d.Bytes(25, MaxInitrdChain, false),
 			Command: d.String(26, maxInitrdCommand, false)},
+		SecureBootQuote: decodeSecureBootQuote(d, 27, 28, 29),
 	}
 	vals := d.Bytes(10, 2+maxPCRValues*(5+65), true)
 	mpv := d.Bytes(18, 2+maxPCRValues*(5+65), false)

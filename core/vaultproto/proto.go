@@ -23,6 +23,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/mrwiora/tpm2-kira/core/attest"
 )
 
 // The machine-facing paths. The vault serves them over HTTPS; the machine
@@ -198,6 +200,10 @@ type ReleaseRequest struct {
 	// PCR7Chain is the digests of PCR 7's events in the machine's event log,
 	// concatenated: believed only as far as they replay to the quoted PCR 7.
 	PCR7Chain []byte `json:"pcr7_chain,omitempty"`
+	// SecureBootQuote and PCR7ChainSHA256 are there beside a selection on the SHA-1 bank:
+	// attest.SecureBootQuote, and what it is replayed with.
+	SecureBootQuote *attest.SecureBootQuote `json:"secure_boot_quote,omitempty"`
+	PCR7ChainSHA256 []byte                  `json:"pcr7_chain_sha256,omitempty"`
 }
 
 // Release states.
