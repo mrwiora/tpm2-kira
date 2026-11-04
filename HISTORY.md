@@ -9,6 +9,30 @@ formats and CLI flags may change without migration paths.
 ---
 
 
+## What the README said until it was cut down (2026-11-04)
+
+The README grew to a manual; its details went to `docs/` (`INSTALL.md`, `CONTROL.md`,
+`BOOT-INTEGRATION.md`, `ARCHITECTURE.md`). These statements in it were no longer true:
+
+- **`tpm2-kira reveal` as the last step of the quick start.** Every slot object is closed by
+  PCR 15 in a boot that passed the code screen, and the command needs root: the code shows at
+  the next boot's code screen.
+- **"A fallback slot sealed to firmware and Secure Boot state alone (not on a GRUB boot)".** One
+  rule for every slot: PCR 7 and the image, on GRUB 7, 8 and 9 too.
+- **The SSH server's unprivileged half "runs as nobody".** It runs as a uid no one else has
+  (`sandbox.ClaimUID`), nobody only when none is free.
+- **The SHA-1 bank among `control`'s red lines.** Orange since 2026-11-04.
+- **`control` edits "two" files of the machine's when asked.** Three: `/etc/kernel/uki.conf` too.
+- **`slot add --totp --pcrs 0e,2e,4u,7e,11u` as what to run on Arch.** `slot add` evaluates the
+  selection, `11s` where the machine signs its images.
+- **Debian's package "installs two scripts" and "the binary".** Five scripts, two binaries.
+- **"Arch's kernel does not lock itself down" beside Debian's hibernation.** A real Arch machine
+  with Secure Boot on, kernel 7.2.14, logged `Lockdown: tpm2-kira: hibernation is restricted`.
+- **`github.com/mrwiora/tpm2-kira` as the clone URL.** The repository is `tpm2-trust/tpm2-kira`; the
+  Go module keeps its path.
+
+---
+
 ## The YubiKey's PIN out of the environment, and no string (2026-11-03, security)
 
 `TPM2_KIRA_PIN` went first in the signer's order. An environment variable is a string that

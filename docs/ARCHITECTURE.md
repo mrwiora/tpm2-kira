@@ -5,6 +5,55 @@ is checked, the two binaries and their packages, the processes at boot,
 and what is kept where. How to use each part is on the pages this one
 links to.
 
+## What it does, and when
+
+On the installed system `tpm2-kira` sets it up (`control` guides through
+all of it); the boot image carries `tpm2-kira-boot` and only the parts
+something uses (`initramfs plan`); in the initrd they run, and the close
+(PCR 15) ends them. The architecture behind it: [ARCHITECTURE.md](ARCHITECTURE.md).
+
+```mermaid
+flowchart TB
+  subgraph SETUP["On the installed system: tpm2-kira (root)"]
+    CTRL["control<br/>guided: 1 boot chain, 2 what the machine combines<br/>writes control.conf + assh.conf, builds the image on leaving"]
+    KEY["setup<br/>signing key: a file or a YubiKey"]
+    SEAL["slot add / slot approve<br/>a boot state approved for PCR values<br/>slot 0 the evaluated selection; --totp: a code, slot 1 the fallback"]
+    PCR["PCR prediction<br/>event log (e), UKI PCR 11 (u), GRUB 8/9, register (r)"]
+    PHONE["phone enrol, phone salt enrol<br/>Marify at the machine, Bluetooth LE"]
+    LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
+    VAULT["luks enrol --salt vault<br/>this TPM + tpm2-kira-vault, over TLS"]
+    INSPECT["status, slot info, slot list, reveal, pcrtips"]
+  end
+
+  subgraph BUILD["Image build (hooks)"]
+    PLAN["initramfs plan<br/>parts: unlock, codes, phone, vault, net, ssh"]
+    HOOKS["mkinitcpio (systemd) / initramfs-tools (Debian)<br/>copy tpm2-kira-boot alone"]
+    POST["post-update hooks: slot approve for the new image"]
+  end
+
+  subgraph BOOT["In the initrd: tpm2-kira-boot"]
+    RUN["run<br/>starts the planned parts; the code screen"]
+    ATT["gate<br/>the phone checks a TPM quote"]
+    SSH["SSH server (aSSH, ssh-child)<br/>the code screen over SSH"]
+    VREL["the vault<br/>releases its part to a TPM quote"]
+    UNLOCK["unlock socket / Debian keyscript<br/>the disk's key, as its LUKS2 tokens say"]
+    CLOSE["close (PCR 15)<br/>when the code screen is over: no codes until reboot"]
+  end
+
+  KEY --> SEAL
+  PCR --> SEAL
+  CTRL --> KEY & SEAL & PHONE & LUKS & VAULT
+  CTRL --> PLAN --> HOOKS
+  POST --> SEAL
+  HOOKS --> RUN
+  RUN --> ATT & SSH & VREL & UNLOCK
+  LUKS -. token .-> UNLOCK
+  PHONE -. enrolment, salt .-> ATT
+  VAULT -. enrolment .-> VREL
+  VREL -. the remote part .-> UNLOCK
+  UNLOCK --> CLOSE
+```
+
 ## The projects
 
 ```mermaid

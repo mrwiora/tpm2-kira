@@ -1,6 +1,172 @@
 # Boot integration in depth
 
-What the hooks put into the initramfs on Arch and Debian, the units and their conditions, the display mode, and how PCR 8/9 are predicted on a GRUB system. The setup steps are in the README.
+What the hooks put into the initramfs on Arch and Debian, the units and their conditions, the display mode, and how PCR 8/9 are predicted on a GRUB system. The installation itself: [INSTALL.md](INSTALL.md).
+
+## Setting it up: Arch Linux (mkinitcpio)
+
+tpm2-kira can display TOTP codes during early boot — before you enter your disk encryption passphrase. This way you can verify the system hasn't been tampered with before typing your LUKS password.
+
+### Install the hooks
+
+```bash
+sudo make install-mkinitcpio
+```
+
+This installs:
+- `sd-tpm2-kira` — mkinitcpio install hook (systemd-based initramfs)
+- A **post-generation hook** that automatically runs `tpm2-kira slot approve` after every initramfs rebuild
+
+### Configure mkinitcpio
+
+Edit `/etc/mkinitcpio.conf` and add the hook next to `sd-encrypt`:
+
+```bash
+# Systemd-based initramfs (recommended):
+HOOKS=(base systemd autodetect modconf block keyboard sd-tpm2-kira sd-encrypt filesystems fsck)
+```
+
+The order of the two hooks does not matter for the boot: what runs when is
+decided by the units (`tpm2-kira.service` before `systemd-pcrosseparator`,
+the key socket before `cryptsetup-pre.target`, the disk after both), not
+by the position in `HOOKS`, and neither hook reads what the other wrote.
+`sd-tpm2-kira sd-encrypt` is the order to use, because it reads like the
+boot: the code screen, then the disk.
+
+What the image does at boot depends on two things, both optional:
+
+| In the image / on the command line | At boot |
+|---|---|
+| nothing but the hook | the code screen, then `sd-encrypt`'s own passphrase prompt (systemd's), as if tpm2-kira were not there once the code is confirmed |
+| `rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock` on the kernel command line | the code screen, then tpm2-kira's passphrase prompt; a typo falls back to systemd's prompt |
+| a phone enrolled (`phone enrol`) and the adapter found at build time | the code screen also asks the phone and shows its verdict; the passphrase prompt is never held |
+
+
+### Configure the disk unlock
+
+The main disk takes its key from tpm2-kira's socket when the kernel
+command line names it next to `rd.luks.name=`:
+
+```
+rd.luks.name=<UUID>=cryptroot rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
+```
+
+`tpm2-kira luks route` checks the files the command line comes from and
+prints the line as it should read (`control`'s step 1 writes it when you
+say so). How the key is then made - asked, derived, or from the vault -
+is the keyslot's token: [DISK-KEY.md](DISK-KEY.md). Then
+rebuild (`sudo mkinitcpio -P`); the post-generation hook approves the new
+boot state, so the next boot matches.
+
+### How it works at boot
+
+```mermaid
+sequenceDiagram
+  participant FW as Firmware / boot loader
+  participant TPM
+  participant K as tpm2-kira-boot run (initrd)
+  participant P as Phone (Marify)
+  participant V as tpm2-kira-vault
+  participant S as SSH client
+  participant D as LUKS volume
+  FW->>TPM: measure the boot chain into the PCRs
+  alt a slot with a TOTP key
+    K->>TPM: the code (approved PCR values, latest generation, not closed)
+    TPM-->>K: 6 digits, only in the approved boot state
+    K->>K: show it (console, or SSH): you compare it with your authenticator
+  else a slot with a phone enrolled
+    K->>P: a TPM quote over Bluetooth LE, at the machine
+    P-->>K: the verdict (and the salt, for the phone's recipe)
+  end
+  opt a keyslot with the vault's salt
+    K->>V: a TPM quote over TLS (the vault's root, then its pinned key)
+    V-->>K: the salt, only for the approved boot state - unattended, the hold ends by itself
+  end
+  opt the SSH server in the image
+    S->>K: connect: a host certificate from the CA in the TPM (aSSH)
+    K-->>S: the same code screen and the password prompt
+  end
+  K->>D: the key, as the tokens say: the vault's, else password (+ phone salt or typed salt)
+  K->>TPM: close (PCR 15) when the code screen is over: no more codes in this boot
+```
+
+`tpm2-kira.service` starts before the disk unlock and runs `tpm2-kira-boot
+run`: the code screen ([CODE.md](CODE.md)), the phone's gate
+when one is enrolled ([PHONE.md](PHONE.md)), the SSH server when
+it is set ([SSH.md](SSH.md)), the vault's release when a slot is
+enrolled with one ([VAULT.md](VAULT.md)), and the key socket
+([DISK-KEY.md](DISK-KEY.md)) - each only when the boot plan put
+it in the image. Enter at the code screen, the phone's verdict, the
+vault's key, or 90 seconds ends the hold;
+`run` then closes the boot (PCR 15), `tpm2-kira-close.service` (Debian: `local-top`'s
+script) closes it again before any volume is opened, whatever `run` did, and no code can be
+computed until the next boot.
+
+See [initramfs/mkinitcpio/mkinitcpio.conf.example](../initramfs/mkinitcpio/mkinitcpio.conf.example) for more HOOKS configurations (LVM, multiple encrypted devices, etc.).
+
+## Setting it up: Debian (initramfs-tools)
+
+Debian's stock initramfs has no systemd in it, so the systemd unit used on Arch
+does not apply. The `.deb` installs these instead:
+
+| Path | Role |
+|---|---|
+| `/usr/share/initramfs-tools/hooks/tpm2-kira` | copies the binary into the image |
+| `/usr/share/initramfs-tools/scripts/init-premount/tpm2-kira` | starts the display at boot |
+| `/usr/share/initramfs-tools/scripts/local-top/tpm2-kira-close` | runs `tpm2-kira-boot close` when the code screen is over, before `cryptroot` opens a volume (a failure reboots) |
+| `/usr/share/initramfs-tools/scripts/init-bottom/tpm2-kira` | stops it and runs `tpm2-kira-boot close` once more before the real root takes over (a failure reboots) |
+| `/lib/cryptsetup/scripts/tpm2-kira` | cryptsetup keyscript: the volume's key from tpm2-kira's prompt |
+
+`/init` runs `init-premount` before `local-top/cryptroot` asks for the
+passphrase, which is what puts the code on screen first. The script starts
+the same `run` as Arch's unit, which starts the phone's radio worker and
+the SSH server's unprivileged half itself: what differs between the two is
+listed in [BOOT-INTEGRATION.md](#arch-and-debian).
+
+### Configure the disk unlock (Debian)
+
+`cryptroot` takes the key from a keyscript; add tpm2-kira's to the root
+volume's line of `/etc/crypttab`, then `sudo update-initramfs -u`:
+
+```
+vda3_crypt UUID=… none luks,discard,keyscript=/lib/cryptsetup/scripts/tpm2-kira
+```
+
+The keyscript asks the same socket `systemd-cryptsetup` does on Arch, and
+cryptsetup's own prompt is its last try: [DISK-KEY.md](DISK-KEY.md#debian-initramfs-tools).
+
+### Choosing PCRs on Debian
+
+There is no UKI, so PCR 11 is empty and the `11u` and `11e` sources do not
+apply. GRUB carries the equivalent measurements instead:
+
+| PCR | Measures | Changes when |
+|---|---|---|
+| 0, 2 | firmware code and option ROMs | firmware update |
+| 4 | the GRUB EFI binary the firmware loaded | `grub-install`, shim/GRUB package update |
+| 7 | Secure Boot state and policy | key rotation, enabling/disabling Secure Boot |
+| 8 | every command GRUB runs (`grub_cmd: ...`) | `update-grub`, kernel version change |
+| 9 | contents of every file GRUB reads (grub.cfg, modules, kernel, initrd) + EFI LoadOptions | **every kernel or initramfs update** |
+
+```bash
+# Measures kernel, initrd and command line; predicted across updates (below)
+tpm2-kira slot add --pcrs "0e,2e,4u,7e,8e,9e"
+```
+
+Secure Boot checks GRUB and the kernel, not GRUB's command line or the
+initrd, so on a GRUB boot every slot includes PCRs 8 and 9: `slot add`
+refuses a selection without them; the fallback slot 1 and the SSH CA's
+slot 1 are PCRs 7, 8 and 9. An entry edited at the GRUB console
+(`break=`, `rdinit=`) is a shell before the close; `control` advises a
+GRUB superuser password (`set superusers=` and `password_pbkdf2` in
+`/etc/grub.d/40_custom`, the menu entries `--unrestricted`, then
+`update-grub`) and judges its absence red.
+
+### Secure Boot on Debian: no hibernation
+
+With Secure Boot on, Debian's kernel locks itself down (`integrity`) and refuses hibernation:
+`/sys/power/disk` shows `[disabled]`, and the kernel logs `hibernation is restricted`. Suspend
+to RAM stays. A vault releases nothing unless Secure Boot is on, so on Debian a machine has a vault's
+keyslot or hibernation, not both.
 
 ## What is installed where
 
