@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: ./.github/actions/go-latest
@@ -33,10 +35,18 @@ jobs:
         run: go mod download
 
       - name: Run go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          cd core && go vet ./...
 
       - name: Run unit tests
-        run: go test -v -tags=unit -coverprofile=coverage.out ./cmd/... ./attest/... ./transport/... ./mobile/...
+        env:
+          # As it ships. With cgo, syscall.AllThreadsSyscall refuses, and with it
+          # aSSH's sandbox: every confinement step of the boot's processes.
+          CGO_ENABLED: 0
+        run: |
+          go test -v -tags=unit -coverprofile=coverage.out ./internal/...
+          cd core && go test -v ./...
 
       - name: Fuzz the parsers of untrusted input
         run: make fuzz FUZZTIME=10s

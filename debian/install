@@ -1,10 +1,12 @@
 tpm2-kira                                                  usr/bin
+tpm2-kira-boot                                             usr/bin
 initramfs/initramfs-tools/hooks/tpm2-kira                  usr/share/initramfs-tools/hooks
 initramfs/initramfs-tools/scripts/init-premount/tpm2-kira  usr/share/initramfs-tools/scripts/init-premount
+initramfs/initramfs-tools/scripts/local-top/tpm2-kira-close usr/share/initramfs-tools/scripts/local-top
 initramfs/initramfs-tools/scripts/init-bottom/tpm2-kira    usr/share/initramfs-tools/scripts/init-bottom
 initramfs/initramfs-tools/post-update.d/tpm2-kira          etc/initramfs/post-update.d
 initramfs/initramfs-tools/kernel/zzz-tpm2-kira             etc/kernel/postinst.d
 initramfs/initramfs-tools/kernel/zzz-tpm2-kira             etc/kernel/postrm.d
 initramfs/initramfs-tools/keyscript/tpm2-kira              lib/cryptsetup/scripts
-initramfs/initramfs-tools/initramfs.conf                   etc/tpm2-kira
 initramfs/common/control.conf                              etc/tpm2-kira
+initramfs/systemd/tpm2-kira-late-close.service             usr/lib/systemd/system

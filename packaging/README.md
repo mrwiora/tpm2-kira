@@ -7,6 +7,11 @@ built on first use with the current Go release), and the Marify APKs next to
 this checkout. `packaging/build-packages.sh deb` builds one; `--help` lists
 the options. The results are in `build/packages/`.
 
+Every release recipe runs [release-binary-check.sh](release-binary-check.sh) on what
+it built: a release's binaries carry no Go build tag. `build-packages.sh --fast-kdf`
+alone makes a test package, into `build/packages-fastkdf/`
+([docs/TESTING.md](../docs/TESTING.md)).
+
 | Target | Where |
 |--------|-------|
 | Arch Linux (AUR) | [aur/](aur/) |

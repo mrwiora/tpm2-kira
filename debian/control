@@ -25,7 +25,7 @@ Description: TPM2-sealed TOTP codes shown before disk unlock
  root takes over.
  .
  A legitimate firmware or bootloader update is approved with
- "tpm2-kira reseal" and the signing key, without re-enrolling the
+ "tpm2-kira slot approve" and the signing key, without re-enrolling the
  authenticator app.
  .
  On Debian the codes are shown from an initramfs-tools init-premount script, so

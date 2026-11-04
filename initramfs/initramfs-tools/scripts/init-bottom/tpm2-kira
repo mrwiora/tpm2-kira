@@ -1,6 +1,7 @@
 #!/bin/sh
-# Stop the background TOTP display and lock code computation before the real
-# root takes over.
+# Stop run and close the boot (PCR 15: every slot and the SSH CA) before the
+# real root takes over: what systemd's stop of tpm2-kira.service and
+# tpm2-kira-close.service do in the initrd.
 #
 # run-init wipes the initramfs, so a process still running from it has to go.
 
@@ -19,18 +20,62 @@ prereqs)
     ;;
 esac
 
-# The TOTP display and, if enabled, the Bluetooth attestation gate. Neither
-# has anything to flush or save, so there is no reason to wait for a graceful
-# exit; the kernel releases the adapter when the gate's socket closes.
-for PIDFILE in /run/tpm2-kira.pid /run/tpm2-kira-attest.pid; do
-    [ -r "$PIDFILE" ] || continue
-    read -r pid < "$PIDFILE"
-    rm -f "$PIDFILE"
-    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
-done
+# run, which may be the SSH server and the phone's coordinator too: asked
+# to stop first, while the network is still up, so the SSH sessions are
+# told and its unprivileged half relays that and ends with it (the server
+# waits for that up to 3 s); its children end with it. After 5 s it is
+# killed.
+if [ -r /run/tpm2-kira.pid ]; then
+    read -r pid < /run/tpm2-kira.pid
+    rm -f /run/tpm2-kira.pid
+    if [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; then
+        i=0
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do
+            sleep 0.1 2>/dev/null || sleep 1
+            i=$((i + 1))
+        done
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+fi
 
-# Lock code computation until the next boot, so nothing in the running
-# system can compute codes. Never let a failure here stop the boot.
-[ -x /usr/bin/tpm2-kira ] && /usr/bin/tpm2-kira cap >/dev/console 2>&1 || true
+# The network's setup, if still at it: nothing to flush or save.
+if [ -r /run/tpm2-kira-net.pid ]; then
+    read -r pid < /run/tpm2-kira-net.pid
+    rm -f /run/tpm2-kira-net.pid
+    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+fi
+
+# The image's network goes down: the running system configures the
+# interface itself (ifupdown, NetworkManager), and an address left from
+# here would stay beside its own.
+if [ -r /run/tpm2-kira/net-device ]; then
+    read -r dev < /run/tpm2-kira/net-device
+    rm -f /run/tpm2-kira/net-device
+    killall -q ipconfig 2>/dev/null || true
+    if [ -n "$dev" ] && command -v ip >/dev/null 2>&1; then
+        ip address flush dev "$dev" 2>/dev/null || true
+        ip route flush dev "$dev" 2>/dev/null || true
+        ip link set dev "$dev" down 2>/dev/null || true
+    fi
+    rm -f "/run/net-$dev.conf"
+fi
+
+# Close the boot (PCR 15 extended) once more, the last point before the real root:
+# run closed it when the code screen was over and local-top's script before cryptroot.
+# This one is for what those did not meet: a boot whose root is not local (no
+# local-top), a TPM that came after them. Every slot object's policy
+# and the SSH CA's read PCR 15, so nothing in the running system can
+# compute a code, open a slot's part or have a key certified. With the TPM
+# in the plan (a sealed slot, an SSH CA). Its failure (the TPM refuses every way
+# of the close, or does not answer for the first time) is a hard reboot: no
+# shell with PCR 15 at zero (initramfs-tools' rescue shell), and the reboot starts
+# the PCRs afresh. docs/SSH.md, "The close". The real root never runs with them
+# open: should the reboot itself fail, this script does not end.
+if [ -d /etc/tpm2-kira/plan/tpm ] && ! /usr/bin/tpm2-kira-boot close >/dev/console 2>&1; then
+    echo "tpm2-kira: the boot is not closed (PCR 15): rebooting" >/dev/console
+    reboot -f || true
+    echo b >/proc/sysrq-trigger || true
+    while :; do sleep 60; done
+fi
 
 exit 0

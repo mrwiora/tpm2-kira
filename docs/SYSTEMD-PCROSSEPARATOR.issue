@@ -214,7 +214,7 @@ Tempting, because `e` and `p` already target end-of-firmware and would need no
 code change, and because it would decouple tpm2-kira from systemd's early-boot
 behaviour entirely. Rejected for two reasons:
 
-1. `tpm2-kira run` is a **continuous loop** (`cmd/scan.go`, `RunCommand`) that
+1. `tpm2-kira-boot run` is a **continuous loop** (`internal/nvslot/scan.go`, `RunCommand`) that
    re-evaluates the sealed slots against live PCRs on every iteration, for the
    whole duration of the password prompt. The separator must fire before
    `cryptsetup-pre.target`, i.e. *during* that loop. Sealed to pre-separator
@@ -287,12 +287,12 @@ Simple, but loses eventlog-based prediction for the affected indices.
 
 ## 10a. Resolution as implemented
 
-- `cmd/measurepoint.go` models the measure point: `os-separator` on PCRs
+- `internal/measure/measurepoint.go` models the measure point: `os-separator` on PCRs
   0-7, 9, 12, 13, 14 and `enter-initrd` on PCR 11, hashing the **word** per
   bank. `DetectMeasurePointExtends` probes stable PCRs against the live
   register and returns an error naming the PCR when it matches neither
   branch. `--measure-point=auto|on|off` overrides it.
-- `cmd/ukipredict.go` computes PCR 11 natively from the unified kernel image:
+- `internal/measure/ukipredict.go` computes PCR 11 natively from the unified kernel image:
   per section `H(name + NUL)` then `H(section bytes)`, in systemd-stub's order,
   then the boot phases. Verified against this host's event log: the section
   replay reproduces `7a7a13a7...` exactly, `.osrel`, `.cmdline`, `.uname` and
@@ -301,9 +301,9 @@ Simple, but loses eventlog-based prediction for the affected indices.
 - New `u` PCR source (`11u`, `11u:/path.efi`). The external `p:COMMAND` predict
   source was **removed** — it is no longer needed, and removing it closes
   `docs/pentest2/vuln-0001` (arbitrary command execution from a planted blob,
-  since the command string was stored in the blob and executed by `reseal`).
+  since the command string was stored in the blob and executed by `slot approve`).
 - Blob version 7 records `measure_point_extends` and `measure_point_detection`,
-  so `tpm2-kira info` states what was applied, and verification reproduces the
+  so `tpm2-kira slot info` states what was applied, and verification reproduces the
   sealed values rather than re-detecting.
 - `tpm2-kira.service` gained `After=systemd-pcrosseparator.service` and
   `After=systemd-pcrphase-initrd.service`. Previously there was **no ordering
@@ -311,7 +311,7 @@ Simple, but loses eventlog-based prediction for the affected indices.
   the measure point landed on was non-deterministic.
 - The mkinitcpio install hook inspects `$BUILDROOT`, prints which measure-point
   units are active, and records the verdict for the post hook to pass to
-  `reseal` — this is what makes the transition rebuild correct.
+  `slot approve` — this is what makes the transition rebuild correct.
 - `tools/pcrtool.py verify` reconstructs the full chain and is the tool that
   found the PCR 9 and PCR 11 behaviour.
 

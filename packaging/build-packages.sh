@@ -6,12 +6,20 @@
 #   apk    the Marify app: the Go core (gomobile) and the debug and release APKs
 #
 # Usage: packaging/build-packages.sh [arch] [deb] [apk] [--core-head]
+#        packaging/build-packages.sh --fast-kdf arch deb
 #
 # Without targets all three are built. Everything lands in build/packages/.
 #
 # The app links the tpm2-kira commit pinned in marify/core.properties.
 # --core-head pins HEAD there first (a change to commit in marify);
 # without it, a pin behind HEAD is reported and built as pinned.
+#
+# --fast-kdf builds a TEST package, no release: Argon2id at a test's cost by the
+# Go build tag kira_test_fast_kdf (internal/diskkey/combine_cost_fast.go), the
+# version marked ".fastkdf", into build/packages-fastkdf/. Only this flag does
+# it: the recipes themselves never name the tag, and refuse a binary with one
+# (packaging/release-binary-check.sh); here their copies are edited. Its disks
+# do not open with a release's key. No final proof runs on it (docs/TESTING.md).
 #
 # Environment:
 #   GOVERSION    Go release to build with (default: the current one from
@@ -21,7 +29,8 @@
 #   JAVA_HOME    a JDK (for apk: gomobile runs javac, Gradle runs on it)
 #
 # Uncommitted changes are not built: the packages come from 'git archive
-# HEAD', so they always match a commit.
+# HEAD' and, for each submodule (assh), the commit HEAD records, so they
+# always match a commit.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,19 +38,41 @@ cd "$root"
 
 targets=()
 core_head=false
+fast_kdf=false
 for arg in "$@"; do
     case $arg in
         arch | deb | apk) targets+=("$arg") ;;
         --core-head) core_head=true ;;
-        -h | --help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *) echo "unknown argument: $arg (arch, deb, apk, --core-head)" >&2; exit 2 ;;
+        --fast-kdf) fast_kdf=true ;;
+        -h | --help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "unknown argument: $arg (arch, deb, apk, --core-head, --fast-kdf)" >&2; exit 2 ;;
     esac
 done
 ((${#targets[@]})) || targets=(arch deb apk)
 want() { [[ " ${targets[*]} " == *" $1 "* ]]; }
+if $fast_kdf && want apk; then
+    echo "--fast-kdf builds arch and deb: the app does not derive the disk's key" >&2
+    exit 2
+fi
 
 die() { echo "error: $*" >&2; exit 1; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# source_archive OUT.tar.gz: HEAD under tpm2-kira-$short/, with the commit
+# of each submodule that HEAD records ('git archive' leaves submodules out).
+source_archive() {
+    local tar="${1%.gz}" mode sha path
+    git archive --format=tar --prefix="tpm2-kira-$short/" -o "$tar" HEAD
+    while read -r mode _ sha path; do
+        [[ $mode == 160000 ]] || continue
+        git -C "$path" cat-file -e "$sha^{commit}" 2>/dev/null ||
+            die "submodule $path lacks commit $sha: run 'git submodule update --init'"
+        git -C "$path" archive --format=tar --prefix="tpm2-kira-$short/$path/" "$sha" >"$tar.sub"
+        tar --concatenate -f "$tar" "$tar.sub"
+        rm "$tar.sub"
+    done < <(git ls-tree -r HEAD)
+    gzip -nf "$tar"
+}
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     echo "note: uncommitted changes are not in the packages (built from HEAD)"
@@ -52,8 +83,14 @@ full="$(git rev-parse HEAD)"
 gover="${GOVERSION:-$(curl -fsS --max-time 10 'https://go.dev/VERSION?m=text' 2>/dev/null | head -1 || true)}"
 [[ -n "$gover" ]] || gover="$(go env GOVERSION)"
 out="$root/build/packages"
+fast_mark=""
+if $fast_kdf; then
+    out="$root/build/packages-fastkdf"
+    fast_mark=".fastkdf"
+    echo "WARNING: a TEST build, Argon2id at a test's cost: not for a real disk, no final proof"
+fi
 mkdir -p "$out"
-echo "tpm2-kira $short, Go $gover, into build/packages/"
+echo "tpm2-kira $short, Go $gover, into ${out#"$root"/}/"
 
 # Check every target's tools before building anything.
 if want arch; then command -v makepkg >/dev/null || die "makepkg not found: the Arch package is built on Arch Linux (or leave out 'arch')"; fi
@@ -67,20 +104,24 @@ fi
 
 if want arch; then
     step "Arch Linux package"
-    version="$(git describe --tags --long HEAD | sed -e 's/^v//' -e 's/-\([0-9]\+\)-g/.r\1.g/' | tr '-' '_')"
+    version="$(git describe --tags --long HEAD | sed -e 's/^v//' -e 's/-\([0-9]\+\)-g/.r\1.g/' | tr '-' '_')$fast_mark"
     aur="$root/build/aur"
     mkdir -p "$aur"
     rm -rf "$aur"/tpm2-kira-* "$aur/PKGBUILD" "$aur/src" "$aur/pkg"
-    git archive --format=tar.gz --prefix="tpm2-kira-$short/" -o "$aur/tpm2-kira-$short.tar.gz" HEAD
+    source_archive "$aur/tpm2-kira-$short.tar.gz"
     digest="$(sha256sum "$aur/tpm2-kira-$short.tar.gz" | cut -d' ' -f1)"
-    # The PKGBUILD in packaging/aur fetches the release tag; this one takes
-    # the archive of HEAD instead.
-    sed -e '/^_tag=/d' \
+    # The PKGBUILD in packaging/aur fetches the release tag and aSSH's
+    # commit; this one takes the archive of HEAD, submodules included.
+    sed -e '/^_tag=/d' -e '/^source+=/d' \
         -e "s/^pkgver=.*/pkgver=$version/" \
         -e "s/^source=.*/source=(\"tpm2-kira-$short.tar.gz\")/" \
         -e "s/^sha256sums=.*/sha256sums=('$digest')/" \
         -e "s/^_srcdir=.*/_srcdir=\"\$pkgname-$short\"/" \
         packaging/aur/PKGBUILD > "$aur/PKGBUILD"
+    if $fast_kdf; then
+        sed -i -e 's/go build -ldflags/go build -tags kira_test_fast_kdf -ldflags/' -e '/release-binary-check/d' "$aur/PKGBUILD"
+        [[ $(grep -c 'go build -tags kira_test_fast_kdf' "$aur/PKGBUILD") == 2 ]] || die "the test build's edit of the PKGBUILD did not take"
+    fi
     # The unit tests have their own run (AGENTS.md); --nocheck skips them here.
     (cd "$aur" && GOTOOLCHAIN="$gover" makepkg -f --nocheck)
     rm -f "$out"/tpm2-kira-*.pkg.tar.zst
@@ -91,19 +132,26 @@ if want deb; then
     step "Debian package"
     image="tpm2-kira-deb-build:$gover"
     if ! docker image inspect "$image" >/dev/null 2>&1; then
-        docker build -t "$image" --build-arg GOVER="$gover" packaging/deb
+        docker build --network host -t "$image" --build-arg GOVER="$gover" packaging/deb
     fi
-    debver="$(packaging/deb-version.sh "$(git describe --tags HEAD)")"
+    debver="$(packaging/deb-version.sh "$(git describe --tags HEAD)")$fast_mark"
     deb="$root/build/deb"
     mkdir -p "$deb"
     rm -f "$deb"/*.deb "$deb"/*.changes "$deb"/*.buildinfo "$deb"/tpm2-kira-*.tar.gz
-    git archive --format=tar.gz --prefix="tpm2-kira-$short/" -o "$deb/tpm2-kira-$short.tar.gz" HEAD
-    # The Go build cache stays in build/deb/.gocache across runs.
-    docker run --rm -v "$deb:/out" -e SHORT="$short" -e DEBVER="$debver" -e OWNER="$(id -u):$(id -g)" \
+    source_archive "$deb/tpm2-kira-$short.tar.gz"
+    # The Go build cache stays in build/deb/.gocache across runs. The host's
+    # network: the build fetches modules, and a container's own network
+    # depends on the host's firewall rules for docker, which another
+    # program reloading them (libvirt's, say) can take away.
+    docker run --rm --network host -v "$deb:/out" -e SHORT="$short" -e DEBVER="$debver" -e OWNER="$(id -u):$(id -g)" -e FAST_MARK="$fast_mark" \
         "$image" bash -ec '
             mkdir -p /build && cd /build
             tar xzf "/out/tpm2-kira-$SHORT.tar.gz" && cd "tpm2-kira-$SHORT"
             sed -i "1s/^tpm2-kira (.*)/tpm2-kira ($DEBVER)/" debian/changelog
+            if [ -n "$FAST_MARK" ]; then
+                sed -i -e "s/go build -ldflags/go build -tags kira_test_fast_kdf -ldflags/" -e "/release-binary-check/d" debian/rules
+                [ "$(grep -c "go build -tags kira_test_fast_kdf" debian/rules)" = 2 ]
+            fi
             DEB_BUILD_OPTIONS=nocheck GOCACHE=/out/.gocache dpkg-buildpackage -us -uc -b
             cp ../tpm2-kira_*.deb ../*.changes ../*.buildinfo /out/
             chown -R "$OWNER" /out'

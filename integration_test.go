@@ -25,14 +25,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/mrwiora/tpm2-kira/cmd"
+	"github.com/mrwiora/tpm2-kira/internal/efivars"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/assh/hostkey"
 )
 
 const (
 	// Test configuration
 	testTPMPath    = "/tmp/tpm2-kira-test-tpm"
-	testNVRAMIndex = "0x01803099"
+	testNVRAMIndex = "0x0180301F"
 	testPCRs       = "0,2,4,7"
 )
 
@@ -55,7 +59,7 @@ func TestSourcesAreInputs(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata") {
+			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata" || name == "build") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -82,12 +86,27 @@ func TestMain(m *testing.M) {
 	// The suite runs the binary as a user against a software TPM; the
 	// binary refuses anything but help as a user unless told so.
 	os.Setenv("TPM2_KIRA_UNPRIVILEGED", "1")
-	fmt.Println("Building tpm2-kira binary for testing...")
-	buildCmd := exec.Command("go", "build", "-o", "tpm2-kira")
-	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if output, err := buildCmd.CombinedOutput(); err != nil {
-		fmt.Printf("Failed to build binary: %v\nOutput: %s\n", err, output)
-		os.Exit(1)
+	// The binaries' EFI variables and machine-id: the suite's own.
+	testDir, dirErr := os.MkdirTemp("", "tpm2-kira-integration-")
+	if dirErr != nil {
+		panic(dirErr)
+	}
+	os.MkdirAll(testDir+"/efivars", 0o755)
+	// A firmware's variable: an empty directory reads as an efivarfs that
+	// is not mounted.
+	os.WriteFile(testDir+"/efivars/BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c", []byte{7, 0, 0, 0, 1, 0}, 0o644)
+	os.WriteFile(testDir+"/machine-id", []byte("0123456789abcdef0123456789abcdef\n"), 0o444)
+	os.Setenv("TPM2_KIRA_TEST_DIR", testDir)
+	// ... and the suite's own reads and writes of the slots' records.
+	efivars.SetDir(testDir + "/efivars")
+	fmt.Println("Building tpm2-kira and tpm2-kira-boot for testing...")
+	for _, b := range [][2]string{{"tpm2-kira", "."}, {"tpm2-kira-boot", "./cmd/tpm2-kira-boot"}} {
+		buildCmd := exec.Command("go", "build", "-o", b[0], b[1])
+		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if output, err := buildCmd.CombinedOutput(); err != nil {
+			fmt.Printf("Failed to build %s: %v\nOutput: %s\n", b[0], err, output)
+			os.Exit(1)
+		}
 	}
 
 	// Generate test signing keys
@@ -238,47 +257,13 @@ func runTPMKira(t *testing.T, tpmPath string, args ...string) (stdout, stderr st
 }
 
 func runTPMKiraWithInput(t *testing.T, tpmPath string, stdinInput string, args ...string) (stdout, stderr string, err error) {
-	// Build args: command comes first, then flags
-	// args[0] should be the command (seal, reveal, nvram, etc.)
+	// The TPM path is a global option, before the command and its
+	// subcommand.
 	allArgs := []string{}
-
-	if len(args) > 0 {
-		// First arg is the command
-		allArgs = append(allArgs, args[0])
-
-		// Special handling for nvram command which has subcommands
-		if args[0] == "nvram" && len(args) > 1 {
-			// For nvram: nvram <subcommand> --tpm <path> <other flags>
-			// Add subcommand first (list, status, delete)
-			allArgs = append(allArgs, args[1])
-
-			// Add TPM path flag after subcommand
-			if tpmPath != "" {
-				allArgs = append(allArgs, "--tpm", tpmPath)
-			}
-
-			// Add remaining args
-			if len(args) > 2 {
-				allArgs = append(allArgs, args[2:]...)
-			}
-		} else {
-			// For other commands: <command> --tpm <path> <other flags>
-			// Add TPM path flag after command if provided
-			if tpmPath != "" {
-				allArgs = append(allArgs, "--tpm", tpmPath)
-			}
-
-			// Add remaining args
-			if len(args) > 1 {
-				allArgs = append(allArgs, args[1:]...)
-			}
-		}
-	} else {
-		// No command provided, just add tpm path if available
-		if tpmPath != "" {
-			allArgs = append(allArgs, "--tpm", tpmPath)
-		}
+	if tpmPath != "" {
+		allArgs = append(allArgs, "--tpm", tpmPath)
 	}
+	allArgs = append(allArgs, args...)
 
 	cmd := exec.Command("./tpm2-kira", allArgs...)
 	var outBuf, errBuf bytes.Buffer
@@ -310,7 +295,7 @@ func TestSealBasic(t *testing.T) {
 
 	// Test seal with signing key
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -343,7 +328,7 @@ func TestSealWithoutPrivKey(t *testing.T) {
 
 	// Test seal with both pubkey and privkey (privkey is required for NV write authorization)
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -367,7 +352,7 @@ func TestSealAndReveal(t *testing.T) {
 
 	// Seal with signing key
 	_, _, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -403,6 +388,43 @@ func TestSealAndReveal(t *testing.T) {
 	}
 }
 
+// TestGlobalOptionsBeforeCommand: --tpm, --nvram and --debug before the
+// command are the command's own: the slot they name is the one read, and
+// an --nvram there is as explicit as one after the command.
+func TestGlobalOptionsBeforeCommand(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+
+	// Slot 3: without --nvram, reveal-plain scans the slots and finds it.
+	if _, _, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", "3", "--pcrs", testPCRs,
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	kira := func(args ...string) string {
+		var out, errb bytes.Buffer
+		c := exec.Command("./tpm2-kira", args...)
+		c.Stdout, c.Stderr = &out, &errb
+		if err := c.Run(); err != nil {
+			t.Fatalf("tpm2-kira %v: %v\n%s", args, err, errb.String())
+		}
+		return strings.TrimSpace(out.String())
+	}
+	isCode := func(s string) bool { return len(s) == 6 && strings.Trim(s, "0123456789") == "" }
+
+	if code := kira("--tpm", tpmPath, "--nvram", "3", "reveal-plain"); !isCode(code) {
+		t.Fatalf("reveal-plain with the options before it: %q", code)
+	}
+	// Slot 4, named before the command, is the only one read: it is empty.
+	if out := kira("--tpm="+tpmPath, "--nvram=4", "--debug", "reveal-plain"); isCode(out) {
+		t.Fatalf("--nvram=4 before the command read slot 3: %q", out)
+	}
+	before := kira("--tpm", tpmPath, "--nvram", "3", "slot", "info", "--json")
+	after := kira("slot", "info", "--json", "--tpm", tpmPath, "--nvram", "3")
+	if before != after || !strings.Contains(before, `"slot_number": 3`) {
+		t.Fatalf("info with the options before the command:\n%s\nafter it:\n%s", before, after)
+	}
+}
+
 // TestSealWithCustomPCRs tests seal with custom PCR selection
 func TestSealWithCustomPCRs(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
@@ -419,14 +441,13 @@ func TestSealWithCustomPCRs(t *testing.T) {
 		{"All common PCRs", "0,1,2,3,4,5,6,7"},
 	}
 
-	for _, tc := range testCases {
+	for i, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use different NVRAM index for each test
-			// Below 0x01803800, where the generation indices begin.
-			nvramIndex := fmt.Sprintf("0x01803%03X", time.Now().UnixNano()%0x7FF)
+			// A slot of its own per case (slots 3-6).
+			nvramIndex := fmt.Sprintf("0x%08X", 0x01803013+i)
 
 			stdout, stderr, err := runTPMKira(t, tpmPath,
-				"seal",
+				"slot", "add", "--totp",
 				"--nvram", nvramIndex,
 				"--pcrs", tc.pcrs,
 				"--pubkey", testPubKeyPath,
@@ -440,11 +461,11 @@ func TestSealWithCustomPCRs(t *testing.T) {
 
 			// Verify it worked
 			if !strings.Contains(stdout, "TOTP Secret Generated") {
-				t.Errorf("Expected success message for PCRs %s", tc.pcrs)
+				t.Errorf("Expected success message for PCRs %s at %s\nStdout: %s\nStderr: %s", tc.pcrs, nvramIndex, stdout, stderr)
 			}
 
 			// Clean up - delete the NVRAM index
-			runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+			runTPMKira(t, tpmPath, "slot", "delete", "--nvram", nvramIndex)
 		})
 	}
 }
@@ -456,7 +477,7 @@ func TestNVRAMDelete(t *testing.T) {
 
 	// First, seal some data
 	_, _, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -469,7 +490,7 @@ func TestNVRAMDelete(t *testing.T) {
 
 	// Verify it exists by checking status
 	stdout, _, err := runTPMKira(t, tpmPath,
-		"nvram",
+		"slot",
 		"status",
 		"--nvram", testNVRAMIndex,
 	)
@@ -484,7 +505,7 @@ func TestNVRAMDelete(t *testing.T) {
 
 	// Delete the NVRAM index
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"nvram",
+		"slot",
 		"delete",
 		"--nvram", testNVRAMIndex,
 	)
@@ -534,9 +555,9 @@ func TestNVRAMDeleteNonExistent(t *testing.T) {
 
 	// Try to delete a non-existent index
 	_, stderr, err := runTPMKira(t, tpmPath,
-		"nvram",
+		"slot",
 		"delete",
-		"--nvram", "0x01803999",
+		"--nvram", "0x0180301E",
 	)
 
 	// Check if command failed OR if error message indicates non-existent index
@@ -561,7 +582,7 @@ func TestNVRAMList(t *testing.T) {
 
 	// List should work even with no indices
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"nvram",
+		"slot",
 		"list",
 	)
 
@@ -571,7 +592,7 @@ func TestNVRAMList(t *testing.T) {
 
 	// Seal some data
 	_, _, err = runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -583,7 +604,7 @@ func TestNVRAMList(t *testing.T) {
 
 	// List again and verify our index appears
 	stdout, stderr, err = runTPMKira(t, tpmPath,
-		"nvram",
+		"slot",
 		"list",
 	)
 
@@ -596,7 +617,7 @@ func TestNVRAMList(t *testing.T) {
 	}
 
 	// Clean up
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", testNVRAMIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", testNVRAMIndex)
 }
 
 // TestSealTwiceOverwrites tests that sealing twice to the same index successfully overwrites
@@ -606,7 +627,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 
 	// First seal
 	stdout1, _, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -631,7 +652,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 
 	// Second seal - should succeed and overwrite
 	stdout2, _, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -676,7 +697,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 	}
 
 	// Clean up
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", testNVRAMIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", testNVRAMIndex)
 }
 
 // TestInfo tests the info command
@@ -686,7 +707,7 @@ func TestInfo(t *testing.T) {
 
 	// Seal with signing key
 	_, _, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -699,9 +720,9 @@ func TestInfo(t *testing.T) {
 
 	// Get info
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"info",
+		"slot", "info",
 		"--nvram", testNVRAMIndex,
-		"--privkey", testPrivKeyPath,
+		"--pubkey", testPubKeyPath,
 	)
 
 	if err != nil {
@@ -724,7 +745,7 @@ func TestInfo(t *testing.T) {
 	}
 
 	// Clean up
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", testNVRAMIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", testNVRAMIndex)
 }
 
 // TestInfoJSON tests the info command with JSON output
@@ -734,7 +755,7 @@ func TestInfoJSON(t *testing.T) {
 
 	// Seal with signing key
 	_, _, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--pubkey", testPubKeyPath,
 		"--privkey", testPrivKeyPath,
@@ -746,7 +767,7 @@ func TestInfoJSON(t *testing.T) {
 
 	// Get info as JSON
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"info",
+		"slot", "info",
 		"--nvram", testNVRAMIndex,
 		"--json",
 	)
@@ -795,7 +816,7 @@ func TestInfoJSON(t *testing.T) {
 	}
 
 	// Clean up
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", testNVRAMIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", testNVRAMIndex)
 }
 
 // TestDebugFlag tests that debug flag provides additional output
@@ -805,7 +826,7 @@ func TestDebugFlag(t *testing.T) {
 
 	// Seal with debug flag
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", testNVRAMIndex,
 		"--debug",
 		"--pubkey", testPubKeyPath,
@@ -822,7 +843,7 @@ func TestDebugFlag(t *testing.T) {
 	}
 
 	// Clean up
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", testNVRAMIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", testNVRAMIndex)
 }
 
 // Helper functions for modular testing
@@ -831,7 +852,7 @@ func TestDebugFlag(t *testing.T) {
 func testSeal(t *testing.T, tpmPath, nvramIndex string) {
 	t.Helper()
 	args := []string{
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -875,7 +896,7 @@ func testReveal(t *testing.T, tpmPath, nvramIndex string) string {
 // testRun executes the run command for a specified duration and then kills it
 func testRun(t *testing.T, tpmPath, nvramIndex string, duration time.Duration) {
 	t.Helper()
-	runCmd := exec.Command("./tpm2-kira", "run", "--tpm", tpmPath, "--nvram", nvramIndex)
+	runCmd := exec.Command("./tpm2-kira-boot", "run", "--tpm", tpmPath, "--nvram", nvramIndex)
 	var runOut bytes.Buffer
 	runCmd.Stdout = &runOut
 	runCmd.Stderr = &runOut
@@ -906,14 +927,14 @@ func testRun(t *testing.T, tpmPath, nvramIndex string, duration time.Duration) {
 func testResealSuccess(t *testing.T, tpmPath, nvramIndex string) {
 	t.Helper()
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"reseal",
+		"slot", "approve",
 		"--nvram", nvramIndex,
 		"--privkey", testPrivKeyPath,
 	)
 	if err != nil {
 		t.Fatalf("✗ Reseal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "Successfully resealed") {
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("✗ Reseal output missing success message: %s", stdout)
 	}
 	t.Log("✓ Reseal successful")
@@ -922,7 +943,7 @@ func testResealSuccess(t *testing.T, tpmPath, nvramIndex string) {
 // testResealFailure performs a reseal operation that should fail
 func testResealFailure(t *testing.T, tpmPath, nvramIndex, expectedError string, extraArgs ...string) {
 	t.Helper()
-	args := []string{"reseal", "--nvram", nvramIndex}
+	args := []string{"slot", "approve", "--nvram", nvramIndex}
 	args = append(args, extraArgs...)
 
 	stdout, stderr, err := runTPMKira(t, tpmPath, args...)
@@ -946,7 +967,7 @@ func testResealFailure(t *testing.T, tpmPath, nvramIndex, expectedError string, 
 func testNVRAMDelete(t *testing.T, tpmPath, nvramIndex string) {
 	t.Helper()
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"nvram",
+		"slot",
 		"delete",
 		"--nvram", nvramIndex,
 	)
@@ -990,7 +1011,7 @@ func testNVRAMDeleted(t *testing.T, tpmPath, nvramIndex string) {
 }
 
 // TestCompleteWorkflow is a comprehensive integration test that verifies the complete workflow
-// including seal, reveal, run, reseal, and nvram delete operations
+// including seal, reveal, run, reseal, and slot delete operations
 func TestCompleteWorkflow(t *testing.T) {
 	t.Log("=== PREPARATION ===")
 
@@ -1014,8 +1035,8 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("✓ Startup TPM2 successful")
 
 	// Use unique NVRAM indices for each phase to avoid conflicts
-	nvramIndexBasic := "0x01803001"
-	nvramIndexReseal := "0x01803002"
+	nvramIndexBasic := "0x01803011"
+	nvramIndexReseal := "0x01803012"
 
 	// ===================================================================
 	t.Log("\n=== TEST BASIC SEAL/REVEAL ===")
@@ -1034,7 +1055,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	testRun(t, tpmPath, nvramIndexBasic, 3*time.Second)
 
 	// NVRAM delete - must be successful
-	t.Log("Testing nvram delete...")
+	t.Log("Testing slot delete...")
 	testNVRAMDelete(t, tpmPath, nvramIndexBasic)
 
 	// ===================================================================
@@ -1059,7 +1080,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	testReveal(t, tpmPath, nvramIndexReseal)
 
 	// NVRAM delete - must be successful
-	t.Log("Testing nvram delete...")
+	t.Log("Testing slot delete...")
 	testNVRAMDelete(t, tpmPath, nvramIndexReseal)
 
 	// Verify data is actually deleted
@@ -1070,13 +1091,13 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("\n=== TEST WITH PCR EXTENSION ===")
 	// ===================================================================
 
-	nvramIndexPCR := "0x01803003"
+	nvramIndexPCR := "0x01803013"
 	customPCRs := "0,23"
 
 	// Seal with pubkey and privkey (privkey required for NV write authorization)
 	t.Log("Testing seal with signing key and PCR 0,23...")
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndexPCR,
 		"--pcrs", customPCRs,
 		"--pubkey", testPubKeyPath,
@@ -1132,11 +1153,11 @@ func TestCompleteWorkflow(t *testing.T) {
 	// key happens to be the sealing key.
 	t.Log("Testing reseal without explicit signing key (must not use the stored path)...")
 	stdout, stderr, err = runTPMKira(t, tpmPath,
-		"reseal",
+		"slot", "approve",
 		"--nvram", nvramIndexPCR,
 	)
 	combinedOutput := stdout + stderr
-	if strings.Contains(stdout, "Successfully resealed") {
+	if strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("✗ Reseal succeeded without --privkey, using a key the blob named: %s", combinedOutput)
 	} else {
 		t.Logf("✓ Reseal without --privkey refused: %s", strings.TrimSpace(combinedOutput))
@@ -1146,11 +1167,11 @@ func TestCompleteWorkflow(t *testing.T) {
 	// unsealed, so this must work whether or not the PCRs match.
 	t.Log("Testing reseal with explicit signing key after the PCR change...")
 	stdout, stderr, err = runTPMKira(t, tpmPath,
-		"reseal",
+		"slot", "approve",
 		"--nvram", nvramIndexPCR,
 		"--privkey", testPrivKeyPath,
 	)
-	if !strings.Contains(stdout, "Successfully resealed") {
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("✗ Reseal after a PCR change failed:\nStdout: %s\nStderr: %s", stdout, stderr)
 	}
 	if !strings.Contains(stdout, "Generation: 2") {
@@ -1162,7 +1183,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	testReveal(t, tpmPath, nvramIndexPCR)
 
 	// Cleanup
-	t.Log("Testing nvram delete for PCR test...")
+	t.Log("Testing slot delete for PCR test...")
 	testNVRAMDelete(t, tpmPath, nvramIndexPCR)
 
 	t.Log("\n=== ALL TESTS PASSED ===")
@@ -1176,7 +1197,7 @@ func TestQuickWorkflow(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	nvramIndex := "0x01803003"
+	nvramIndex := "0x01803013"
 
 	// Simple workflow: seal -> reveal -> reseal -> reveal -> delete
 	t.Log("Step 1: Seal with signing key")
@@ -1225,7 +1246,7 @@ func TestExitCodes(t *testing.T) {
 	// Test 2: Seal and then extend PCR to cause mismatch
 	t.Log("Test 2: Seal with PCR 0,23...")
 	_, _, err = runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndex,
 		"--pcrs", "0,23",
 		"--pubkey", testPubKeyPath,
@@ -1291,7 +1312,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 7: Info command with PCR mismatch...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "info", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command("./tpm2-kira", "slot", "info", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1305,7 +1326,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 8: Reseal without signing key when PCRs changed (should show error but exit 0)...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reseal", "--tpm", tpmPath, "--nvram", nvramIndex)
+	cmd = exec.Command("./tpm2-kira", "slot", "approve", "--tpm", tpmPath, "--nvram", nvramIndex)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1319,7 +1340,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 9: NVRAM status on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "nvram", "status", "--tpm", tpmPath, "--nvram", "0x01803050")
+	cmd = exec.Command("./tpm2-kira", "slot", "status", "--tpm", tpmPath, "--nvram", "0x0180301D")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1333,7 +1354,7 @@ func TestExitCodes(t *testing.T) {
 	t.Log("Test 10: NVRAM delete on non-existent index...")
 	stdout.Reset()
 	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "nvram", "delete", "--tpm", tpmPath, "--nvram", "0x01803051")
+	cmd = exec.Command("./tpm2-kira", "slot", "delete", "--tpm", tpmPath, "--nvram", "0x0180301E")
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
@@ -1353,10 +1374,10 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	nvramIndex := "0x01803004"
+	nvramIndex := "0x01803014"
 
 	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"seal",
+		"slot", "add", "--totp",
 		"--nvram", nvramIndex,
 		"--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath,
@@ -1369,10 +1390,10 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 
 	// Without --privkey, reseal uses the default key location only.
 	stdout, stderr, _ = runTPMKira(t, tpmPath,
-		"reseal",
+		"slot", "approve",
 		"--nvram", nvramIndex,
 	)
-	if strings.Contains(stdout, "Successfully resealed") {
+	if strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("Reseal succeeded without the slot's key:\n%s", stdout)
 	}
 	if !strings.Contains(stdout+stderr, "--privkey <path>") {
@@ -1385,7 +1406,7 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 	testReveal(t, tpmPath, nvramIndex)
 
 	// Clean up
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", nvramIndex)
 }
 
 // restartSoftwareTPM power-cycles the simulator the way a reboot resets a
@@ -1432,9 +1453,9 @@ func revealPlainCode(t *testing.T, tpmPath, nvramIndex string) (string, string) 
 func TestCodeMatchesAuthenticator(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803040"
+	nvramIndex := "0x01803015"
 
-	stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
+	stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath)
 	if err != nil || !strings.Contains(stdout, "Secret: ") {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
@@ -1473,55 +1494,55 @@ func TestCodeMatchesAuthenticator(t *testing.T) {
 	t.Fatal("could not compare within one 30-second window")
 }
 
-// TestCapLocksCodesUntilReboot checks that 'cap' makes codes unavailable,
-// that reseal still works while locked, and that a reboot lifts the lock.
-func TestCapLocksCodesUntilReboot(t *testing.T) {
+// TestCloseEndsCodesUntilReboot checks that the close (PCR 15) makes codes
+// unavailable, that approving still works while closed, and that a reboot
+// opens the slot again.
+func TestCloseEndsCodesUntilReboot(t *testing.T) {
 	if _, err := exec.LookPath("swtpm_ioctl"); err != nil {
 		t.Skip("swtpm_ioctl not found")
 	}
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	nvramIndex := "0x01803041"
+	nvramIndex := "0x01803016"
 
-	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
+	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
-		t.Fatalf("no code before cap:\n%s", out)
+		t.Fatalf("no code before the close:\n%s", out)
 	}
 
-	stdout, stderr, _ := runTPMKira(t, tpmPath, "cap")
-	if !strings.Contains(stdout, "locked 1 generation index") {
-		t.Fatalf("cap did not lock the generation index:\n%s\n%s", stdout, stderr)
+	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
+		t.Fatalf("close failed: %v\n%s\n%s", err, stdout, stderr)
 	}
 	code, out := revealPlainCode(t, tpmPath, nvramIndex)
-	if code != "" || !strings.Contains(out, "Locked until reboot") {
-		t.Fatalf("expected no code after cap, got %q:\n%s", code, out)
+	if code != "" || !strings.Contains(out, "Closed until the next boot") {
+		t.Fatalf("expected no code after the close, got %q:\n%s", code, out)
 	}
-	t.Log("✓ No code after cap")
+	t.Log("✓ No code after the close")
 
-	// A second cap is harmless.
-	if stdout, _, _ := runTPMKira(t, tpmPath, "cap"); !strings.Contains(stdout, "locked 1 generation index") {
-		t.Errorf("second cap: %s", stdout)
+	// A second close is harmless.
+	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
+		t.Fatalf("second close: %v\n%s\n%s", err, stdout, stderr)
 	}
 
-	// reseal in the running OS works while the index is read-locked.
-	stdout, stderr, _ = runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
-	if !strings.Contains(stdout, "Successfully resealed") {
-		t.Fatalf("reseal while capped failed:\n%s\n%s", stdout, stderr)
+	// Approving in the running OS works while closed, and opens nothing.
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "slot", "approve", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
+		t.Fatalf("approve while closed failed:\n%s\n%s", stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code != "" {
-		t.Fatalf("reseal lifted the cap: got code %s\n%s", code, out)
+		t.Fatalf("an approval opened the closed slot: got code %s\n%s", code, out)
 	}
-	t.Log("✓ Reseal works while capped, and the cap holds")
+	t.Log("✓ Approving works while closed, and the close holds")
 
 	restartSoftwareTPM(t, tpmPath)
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
 		t.Fatalf("no code after the reboot:\n%s", out)
 	}
 	t.Log("✓ Codes are back after a reboot")
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", nvramIndex)
 }
 
 // TestResealRevokesOldBlob checks that a blob kept from before a reseal no
@@ -1530,10 +1551,10 @@ func TestCapLocksCodesUntilReboot(t *testing.T) {
 func TestResealRevokesOldBlob(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-	const index = 0x01803042
+	const index = 0x01803017
 	nvramIndex := fmt.Sprintf("0x%08X", index)
 
-	if stdout, stderr, err := runTPMKira(t, tpmPath, "seal", "--nvram", nvramIndex, "--pcrs", "0,7",
+	if stdout, stderr, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,7",
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
 	}
@@ -1542,34 +1563,24 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldBlob, err := cmd.ReadFromNVRAM(tpm, index)
 	tpm.Close()
+	oldBlob, err := nvslot.ReadRecord(index)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	stdout, stderr, _ := runTPMKira(t, tpmPath, "reseal", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
-	if !strings.Contains(stdout, "Successfully resealed") {
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "slot", "approve", "--nvram", nvramIndex, "--privkey", testPrivKeyPath)
+	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("reseal failed:\n%s\n%s", stdout, stderr)
 	}
 	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
 		t.Fatalf("no code after reseal:\n%s", out)
 	}
 
-	// Put the old blob back. An attacker can do this without the key by
-	// deleting and redefining the index; the test uses the key for brevity.
-	signer, err := cmd.LoadSigningPrivateKey(testPrivKeyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tpm, err = transport.OpenTPM(tpmPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = cmd.WriteToNVRAM(tpm, index, oldBlob, signer.Public(), signer)
-	tpm.Close()
-	if err != nil {
-		t.Fatalf("restoring the old blob: %v", err)
+	// Put the old record back, as anyone who can write the EFI variable
+	// can: the generation in the TPM revokes it.
+	if err := nvslot.WriteRecord(index, oldBlob); err != nil {
+		t.Fatalf("restoring the old record: %v", err)
 	}
 
 	code, out := revealPlainCode(t, tpmPath, nvramIndex)
@@ -1577,5 +1588,88 @@ func TestResealRevokesOldBlob(t *testing.T) {
 		t.Fatalf("the old blob still yields a code (%q):\n%s", code, out)
 	}
 	t.Log("✓ The blob from before the reseal is revoked")
-	runTPMKira(t, tpmPath, "nvram", "delete", "--nvram", nvramIndex)
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", nvramIndex)
+}
+
+// runBoot runs the boot binary, tpm2-kira-boot.
+func runBoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	c := exec.Command("./tpm2-kira-boot", args...)
+	c.Stdout, c.Stderr = &out, &errb
+	err = c.Run()
+	return out.String(), errb.String(), err
+}
+
+// TestBootCloseExtendsPCR15 checks 'tpm2-kira-boot close', what the image
+// runs when the code screen is over and before a resume: it extends PCR 15
+// with aSSH's close event and exits 0; without a TPM it exits non-zero, so
+// that the unit fails (a hard reboot) and the Debian script reboots.
+func TestBootCloseExtendsPCR15(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	read := func() []byte {
+		t.Helper()
+		c, err := transport.OpenTPM(tpmPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		v, err := hostkey.ReadPCRs(c, hostkey.SHA256, []int{hostkey.ClosePCR})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v[hostkey.ClosePCR]
+	}
+	if !bytes.Equal(read(), make([]byte, 32)) {
+		t.Fatal("PCR 15 is not zero at the start")
+	}
+	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
+		t.Fatalf("close: %v\n%s\n%s", err, stdout, stderr)
+	}
+	want, _ := hostkey.EventChain(hostkey.SHA256, []string{hostkey.CloseEvent})
+	if !bytes.Equal(read(), want) {
+		t.Fatalf("PCR 15 after close: %x, want %x", read(), want)
+	}
+	notTPM := filepath.Join(t.TempDir(), "not-a-tpm")
+	os.WriteFile(notTPM, nil, 0o600)
+	if _, stderr, err := runBoot(t, "close", "--tpm", notTPM); err == nil || !strings.Contains(stderr, "the boot is not closed") {
+		t.Fatalf("close without a TPM: %v\n%s", err, stderr)
+	}
+}
+
+// The command itself, the way a script runs it: an index of another shape at
+// a slot's generation index stays under --yes, the message naming --force, and
+// goes under --force; a slot added afterwards is one.
+func TestSlotDeleteForeignIndexByHand(t *testing.T) {
+	tpmPath, cleanup := setupSoftwareTPM(t)
+	defer cleanup()
+	const gen = nvslot.NVRAMSlotStart + nvslot.GenerationIndexOffset + 5
+	dev, err := tpmdev.Open(tpmPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dev.Close()
+	pub := tpm2.TPMSNVPublic{NVIndex: tpm2.TPMHandle(gen), NameAlg: tpm2.TPMAlgSHA256,
+		Attributes: tpm2.TPMANV{OwnerRead: true, AuthRead: true, PolicyWrite: true, ReadSTClear: true, NT: tpm2.TPMNTOrdinary},
+		AuthPolicy: tpm2.TPM2BDigest{Buffer: bytes.Repeat([]byte{7}, 32)}, DataSize: 8}
+	if _, err := (tpm2.NVDefineSpace{AuthHandle: tpm2.TPMRHOwner, PublicInfo: tpm2.New2B(pub)}).Execute(dev); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, _ := runTPMKira(t, tpmPath, "slot", "delete", "--nvram", "5", "--yes")
+	if !strings.Contains(stderr+stdout, "--nvram 5 --force") || !strings.Contains(stdout, "read_stclear") || !tpmdev.NVRAMIndexExists(dev, gen) {
+		t.Fatalf("--yes:\n%s\n%s", stdout, stderr)
+	}
+	stdout, stderr, err = runTPMKira(t, tpmPath, "slot", "delete", "--nvram", "5", "--force")
+	if err != nil || tpmdev.NVRAMIndexExists(dev, gen) {
+		t.Fatalf("--force: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if stdout, stderr, err = runTPMKira(t, tpmPath, "slot", "add", "--nvram", "5", "--pcrs", testPCRs, "--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath, "--totp"); err != nil {
+		t.Fatalf("slot add afterwards: %v\n%s\n%s", err, stdout, stderr)
+	}
+	if nvslot.ForeignAt(dev, gen) != nil || !tpmdev.NVRAMIndexExists(dev, gen) {
+		t.Fatalf("slot add afterwards left no generation index of tpm2-kira's:\n%s\n%s", stdout, stderr)
+	}
+	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", "5") // the suite's variables are shared
 }

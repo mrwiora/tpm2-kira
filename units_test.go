@@ -23,6 +23,20 @@ func directives(t *testing.T, path string) []string {
 	return out
 }
 
+// section is the section a directive is in, "" when it is not there.
+func section(lines []string, want string) string {
+	cur := ""
+	for _, l := range lines {
+		if strings.HasPrefix(l, "[") {
+			cur = l
+		}
+		if l == want {
+			return cur
+		}
+	}
+	return ""
+}
+
 func has(lines []string, want string) bool {
 	for _, l := range lines {
 		if l == want {
@@ -35,65 +49,23 @@ func has(lines []string, want string) bool {
 // The initrd units are installed on the host too (the mkinitcpio hook takes
 // them from there). Enabled on the host by mistake they must do nothing.
 func TestInitrdUnitsOnlyRunInTheInitrd(t *testing.T) {
-	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-cap.service", "tpm2-kira-attest.service", "tpm2-kira-unlock.socket"} {
+	for _, unit := range []string{"tpm2-kira.service", "tpm2-kira-close.service", "tpm2-kira-machine-id.service", "tpm2-kira-unlock.socket"} {
 		if !has(directives(t, "initramfs/systemd/"+unit), "ConditionPathExists=/etc/initrd-release") {
 			t.Errorf("%s lacks ConditionPathExists=/etc/initrd-release", unit)
 		}
 	}
 }
 
-// The Bluetooth gate parses radio input as root before the disk is unlocked.
-// Its unit confines it to what it needs; this pins the parts that matter, so
-// a later edit cannot quietly drop them.
-func TestGateUnitIsConfined(t *testing.T) {
-	lines := directives(t, "initramfs/systemd/tpm2-kira-attest.service")
-	for _, want := range []string{
-		"NoNewPrivileges=yes",
-		"CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW",
-		"RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX",
-		"IPAddressDeny=any",
-		"DevicePolicy=closed",
-		"ProtectSystem=strict",
-		"ProtectKernelTunables=yes",
-		"MemoryDenyWriteExecute=yes",
-		"SystemCallFilter=@system-service",
-		"SystemCallFilter=~@privileged",
-		"SystemCallErrorNumber=EPERM",
-	} {
-		if !has(lines, want) {
-			t.Errorf("gate unit lacks %q", want)
-		}
-	}
-	// What the gate did must be readable after the boot; its narrative
-	// stays off the console, where the code screen is, and what needs
-	// eyes (stderr) reaches it.
-	if !has(lines, "StandardOutput=journal") || !has(lines, "StandardError=journal+console") {
-		t.Error("the gate's output: narrative to the journal, failures to the console too")
-	}
-	// The gate runs next to the code screen, not after it: a slot enrolled
-	// with a phone is verified while the code is shown.
-	if has(lines, "After=systemd-pcrosseparator.service") || has(lines, "After=tpm2-kira.service") {
-		t.Error("the gate waits for the code screen to end")
-	}
-	if !has(lines, "After=systemd-pcrphase-initrd.service") {
-		t.Error("the gate may quote before enter-initrd is in PCR 11")
-	}
-	// The radio worker has no TPM (it would compute TOTP codes while the
-	// code screen is up); the coordinator in tpm2-kira.service has it.
-	for _, l := range lines {
-		if strings.HasPrefix(l, "DeviceAllow=") && strings.Contains(l, "tpm") {
-			t.Errorf("the radio worker is given a TPM: %s", l)
-		}
-		if strings.Contains(l, "dev-tpm") {
-			t.Errorf("the radio worker depends on a TPM device: %s", l)
-		}
-		if strings.HasPrefix(l, "RuntimeDirectory") || strings.HasPrefix(l, "ReadWritePaths") {
-			t.Errorf("the radio worker can write to the file system: %s", l)
-		}
-	}
-	const socket = "/run/tpm2-kira/gate.sock"
-	if !has(lines, "ExecStart=/usr/bin/tpm2-kira attest gate --coordinator "+socket) {
-		t.Error("the radio worker is not pointed at its coordinator")
+// The boot is one process tree on every distribution: the unit (Arch) and
+// the init-premount script (Debian) start the same run, which starts the
+// phone's radio worker and the SSH server's unprivileged half itself and
+// confines them in code (phonegate/gate_child.go, assh/sandbox), and the
+// same short step before the network (machine-id). Neither
+// starts a gate of its own, waits for the TPM itself or loads the
+// adapter's modules itself.
+func TestTheBootIsRunOnBothDistributions(t *testing.T) {
+	if _, err := os.Stat("initramfs/systemd/tpm2-kira-attest.service"); err == nil {
+		t.Error("a unit of the gate's own: run starts the radio worker")
 	}
 	display := directives(t, "initramfs/systemd/tpm2-kira.service")
 	// The code screen owns the terminal; what the key provider reports
@@ -101,24 +73,78 @@ func TestGateUnitIsConfined(t *testing.T) {
 	if !has(display, "StandardInput=tty") || !has(display, "StandardOutput=tty") || !has(display, "StandardError=journal+console") {
 		t.Error("the display's terminal and journal wiring")
 	}
-	if !has(display, "ExecStart=tpm2-kira run --gate "+socket) {
-		t.Error("the code screen does not listen where the radio worker asks")
+	// $TPM2_KIRA_REMOTE: the SSH server's flags from the image's drop-in,
+	// no argument at all without one. --plan: what the image carries.
+	const arch = "ExecStart=tpm2-kira-boot run --plan /etc/tpm2-kira/plan $TPM2_KIRA_REMOTE"
+	if !has(display, arch) {
+		t.Error("the code screen does not follow the image's plan")
+	}
+	// run waits for the TPM itself, when the plan needs it.
+	for _, l := range display {
+		if strings.Contains(l, "dev-tpm") {
+			t.Errorf("the code screen's unit waits for the TPM: %s", l)
+		}
+	}
+	// The stop is run's to pass on to its children, as on Debian: a
+	// SIGTERM to ssh-child at the same moment cuts the sessions before
+	// they are told.
+	if !has(display, "KillMode=mixed") {
+		t.Error("the stop's SIGTERM reaches run's children too")
 	}
 	if !has(display, "Before=systemd-pcrosseparator.service") || !has(display, "Before=systemd-pcrnvdone.service") || !has(display, "Conflicts=initrd-switch-root.target") {
 		t.Error("the coordinator must hold both separators back and end with the initramfs")
 	}
-	// What the gate cannot work without.
-	for _, want := range []string{"DeviceAllow=/dev/rfkill rw", "DeviceAllow=/dev/console rw"} {
-		if !has(lines, want) {
-			t.Errorf("gate unit lacks %q", want)
+
+	// Debian: the same run, with the key socket of its own (systemd's
+	// socket unit hands it over instead), and nothing else of tpm2-kira's.
+	script, err := os.ReadFile("initramfs/initramfs-tools/scripts/init-premount/tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started []string
+	for _, l := range strings.Split(string(script), "\n") {
+		if l = strings.TrimSpace(l); !strings.HasPrefix(l, "#") && !strings.HasPrefix(l, "[") && strings.Contains(l, "tpm2-kira-boot ") {
+			started = append(started, l)
 		}
 	}
-	// Bluetooth sockets exist only in the initial network namespace, and
-	// the TPM is a device.
-	for _, bad := range []string{"PrivateNetwork=yes", "PrivateDevices=yes"} {
-		if has(lines, bad) {
-			t.Errorf("gate unit has %q, which breaks it", bad)
+	const debian = `/usr/bin/tpm2-kira-boot run --plan "$PLAN" --unlock "$UNLOCK" --ready-file /run/tpm2-kira/screen-over $TPM2_KIRA_REMOTE `
+	const machineID = `/usr/bin/tpm2-kira-boot machine-id `
+	if len(started) != 2 || !strings.Contains(started[0], machineID) || !strings.Contains(started[1], debian) {
+		t.Errorf("Debian starts %q, want the machine-id's release, then run as %q", started, debian)
+	}
+	// Secure Boot's state and the slots' records are EFI variables: efivarfs is
+	// mounted before run, in every image - not only with the TPM or a network.
+	mount := strings.Index(string(script), "mount -t efivarfs efivarfs /sys/firmware/efi/efivars")
+	netCase := strings.Index(string(script), `case "$TPM2_KIRA_NET" in`+"\ndhcp | static)\n    TPM2_KIRA_LOG")
+	run := strings.Index(string(script), debian)
+	if mount < 0 || run < 0 || mount > run || netCase >= 0 && mount > netCase || !strings.Contains(string(script), `if [ -d /sys/firmware/efi/efivars ] && ! grep`) {
+		t.Error("Debian's script does not mount efivarfs before run, for every image")
+	}
+	// Arch: the same release, before the network and the separators.
+	mid := directives(t, "initramfs/systemd/tpm2-kira-machine-id.service")
+	for _, want := range []string{"ExecStart=tpm2-kira-boot machine-id", "Type=oneshot", "Before=systemd-networkd.service",
+		"Before=systemd-pcrosseparator.service", "After=systemd-pcrphase-initrd.service",
+		// Unsealed under slot 0's policy: before the close (PCR 15) ends it.
+		"Before=tpm2-kira-close.service"} {
+		if !has(mid, want) {
+			t.Errorf("tpm2-kira-machine-id.service lacks %q", want)
 		}
+	}
+	// ... and before run, which closes when its code screen is over.
+	if !has(directives(t, "initramfs/systemd/tpm2-kira.service"), "After=tpm2-kira-machine-id.service") {
+		t.Error("run may close the boot before the machine-id is released")
+	}
+	for _, bad := range []string{"modprobe", "/dev/tpmrm0", "gate-child", "--gate", "INITRAMFS_MODE"} {
+		if strings.Contains(string(script), bad) {
+			t.Errorf("Debian's script has %q: run, or the image's init, does that on both", bad)
+		}
+	}
+	hook, err := os.ReadFile("initramfs/initramfs-tools/hooks/tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hook), `force_load "$value"`) {
+		t.Error("Debian's image does not load the adapter's modules by its init")
 	}
 }
 
@@ -130,6 +156,7 @@ func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
 	for _, want := range []string{
 		"ListenStream=/run/tpm2-kira/unlock.sock",
 		"SocketMode=0600",
+		"Wants=cryptsetup-pre.target",
 		"Before=cryptsetup-pre.target",
 		"Service=tpm2-kira.service",
 		"RemoveOnStop=yes",
@@ -139,12 +166,63 @@ func TestUnlockSocketIsWiredToTheDisplay(t *testing.T) {
 		}
 	}
 	svc := directives(t, "initramfs/systemd/tpm2-kira.service")
-	if !has(svc, "Sockets=tpm2-kira-unlock.socket") {
-		t.Error("the display's service does not take the key socket")
+	// Sockets= is a [Service] setting: systemd ignores it in [Unit].
+	if section(svc, "Sockets=tpm2-kira-unlock.socket") != "[Service]" {
+		t.Error("the display's service does not take the key socket in [Service]")
 	}
 	// The key is asked for after the separator, which the display's READY
 	// precedes; the service must not end with the hold any more.
 	if !has(svc, "Conflicts=initrd-switch-root.target") {
 		t.Error("the service is not ended at switch-root")
+	}
+}
+
+// The close (PCR 15: every slot and the SSH CA) when the code screen is
+// over: after run, before any volume is opened, its failure the boot's (no
+// "-" before the command; the hook makes initrd.target require it). There
+// is no other lock: no cap unit.
+func TestCloseUnitFailsTheBoot(t *testing.T) {
+	if _, err := os.Stat("initramfs/systemd/tpm2-kira-cap.service"); err == nil {
+		t.Error("a cap unit: PCR 15 closes the slots")
+	}
+	d := directives(t, "initramfs/systemd/tpm2-kira-close.service")
+	for _, want := range []string{"After=tpm2-kira.service", "Wants=cryptsetup-pre.target",
+		"Before=cryptsetup-pre.target initrd.target initrd-switch-root.target", "Type=oneshot", "ExecStart=tpm2-kira-boot close",
+		"FailureAction=reboot-force", "ConditionKernelCommandLine=!tpm2-kira.noclose"} {
+		if !has(d, want) {
+			t.Errorf("tpm2-kira-close.service lacks %s", want)
+		}
+	}
+	// The late closer: after the close, in the image and in the root, only when
+	// the close left its file.
+	d = directives(t, "initramfs/systemd/tpm2-kira-late-close.service")
+	for _, want := range []string{"ConditionPathExists=/run/tpm2-kira/close-pending", "After=tpm2-kira-close.service",
+		"ExecStart=tpm2-kira-boot close --late", "Conflicts=shutdown.target initrd-switch-root.target"} {
+		if !has(d, want) {
+			t.Errorf("tpm2-kira-late-close.service lacks %s", want)
+		}
+	}
+	hook, err := os.ReadFile("initramfs/mkinitcpio/install/sd-tpm2-kira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hook), "initrd.target.requires/tpm2-kira-close.service") {
+		t.Error("the hook does not make initrd.target require the close")
+	}
+}
+
+// bootctl update through systemd-boot-update.service moves PCR 4: its drop-in
+// approves, only what moved, and its failure is never the update's.
+func TestBootUpdateApprovesPCR4(t *testing.T) {
+	d := directives(t, "initramfs/systemd/systemd-boot-update-tpm2-kira.conf")
+	if !has(d, "ExecStartPost=-/usr/bin/tpm2-kira slot approve --if-moved") {
+		t.Errorf("the drop-in: %v", d)
+	}
+	pkg, err := os.ReadFile("packaging/aur/PKGBUILD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pkg), "systemd-boot-update.service.d/tpm2-kira.conf") {
+		t.Error("the package does not install the drop-in")
 	}
 }

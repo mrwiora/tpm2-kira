@@ -55,7 +55,7 @@ right.
 
 ## 4. Fix
 
-`cmd/ukipredict.go` hashes `min(VirtualSize, SizeOfRawData)`:
+`internal/measure/ukipredict.go` hashes `min(VirtualSize, SizeOfRawData)`:
 
 ```go
 size := int64(section.VirtualSize)
@@ -69,11 +69,11 @@ data, which would otherwise read past the section.
 
 ## 5. Guards added
 
-- `cmd/ukipredict_test.go` computes both the padded and unpadded PCR 11 values
+- `internal/measure/ukipredict_test.go` computes both the padded and unpadded PCR 11 values
   and fails if the predictor returns the padded one. It skips when no unified
   kernel image is present, and skips rather than passing vacuously if no
   measured section happens to be padded in that image.
-- `tpm2-kira seal` now runs `VerifyUKISpecsAgainstEventlog`, which recomputes
+- `tpm2-kira slot add` now runs `VerifyUKISpecsAgainstEventlog`, which recomputes
   PCR 11 from the image and compares it against this boot's firmware event log
   measurement by measurement. This exact bug would have been caught at seal
   time instead of at the prompt.
@@ -83,7 +83,7 @@ data, which would otherwise read past the section.
     since boot (mtime vs `/proc/uptime`). If it was rebuilt after boot it cannot
     be the booted image, so the check is not applicable and only warns — this is
     the normal state right after a kernel or initramfs update.
-  - `reseal` deliberately skips it: it runs right after an initramfs rebuild,
+  - `slot approve` deliberately skips it: it runs right after an initramfs rebuild,
     where the image on disk is expected to differ from the booted one.
   - `--verify-uki=false` overrides it entirely.
   - An unreadable event log is a skip with a notice, not a failure — absence of

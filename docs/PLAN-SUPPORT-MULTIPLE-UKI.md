@@ -2,7 +2,7 @@
 
 > **Status:** concept. Step 1 (a smaller blob, and a size check against
 > the TPM instead of a fixed refusal) is implemented; steps 2–6 are open.
-> **Scope:** the slot blob, `seal`, `reseal`, the boot's policy session,
+> **Scope:** the slot blob, `slot add`, `slot approve`, the boot's policy session,
 > the mkinitcpio post hook and `control`.
 
 ---
@@ -18,7 +18,7 @@ gives PCR 11 its own value.
 Today slot 0's PCR 11 is computed from **one** image: `11u` stands for
 `/boot/EFI/Linux/arch-linux.efi` (or the path after `11u:`), and that path is
 stored in the slot. The post hook runs once per built image and calls
-`tpm2-kira reseal`, which ignores the image it was called for and recomputes
+`tpm2-kira slot approve`, which ignores the image it was called for and recomputes
 PCR 11 from the stored path each time. The outcome:
 
 - booting the image at the stored path: slot 0 matches, the code appears;
@@ -84,35 +84,35 @@ phones already: `WriteToNVRAM` compares the signed blob with
 
 For profiles:
 
-- the first profile, the image `11u` names, is always sealed and resealed;
+- the first profile, the image `11u` names, is always sealed and approved;
   a slot without it does not exist;
-- a further profile is added only if the blob with it fits; if not, `seal`,
-  `reseal` and `control` say which profile was left out, how many bytes
+- a further profile is added only if the blob with it fits; if not, `slot add`,
+  `slot approve` and `control` say which profile was left out, how many bytes
   were missing and what would make room (an ECC key, a phone less), and
   that image keeps booting through slot 1;
-- a reseal never fails because of a profile: a profile that no longer fits
+- an approval never fails because of a profile: a profile that no longer fits
   (a phone was added since) is dropped with that message, and the rest is
   written.
 
-## 4. Seal and reseal
+## 4. Slot add and slot approve
 
-- **Profiles come from the presets.** `control` and `seal` read
+- **Profiles come from the presets.** `control` and `slot add` read
   `/etc/mkinitcpio.d/*.preset` and list every `<preset>_uki=`. The default
   is the first image and the others in the preset's order, up to three;
   `control` shows the list for acknowledgement, as it does for the PCRs. The
   paths are stored in the blob (signed), not in a configuration file.
-- **The generation is shared**, so a reseal raises it once and signs every
+- **The generation is shared**, so an approval raises it once and signs every
   profile again, each with PCR 11 computed from its own image. Raising the
   generation revokes all earlier approvals of the slot at once, which keeps
   revocation as simple as it is now.
-- **The post hook passes the image it was called for** (`$2`). `reseal`
+- **The post hook passes the image it was called for** (`$2`). `slot approve`
   still re-signs every profile (the generation is shared), but first
   compares: when every profile's recomputed PCR 11 and the other PCRs equal
   what is approved, nothing is written and nothing signed. During
-  `mkinitcpio -P` the first run reseals, a later run whose image did not
+  `mkinitcpio -P` the first run approves, a later run whose image did not
   change the outcome is skipped.
 - **A missing image** (a preset removed, a path renamed) drops that profile
-  at the next reseal, with a message; the first profile's image missing is
+  at the next approval, with a message; the first profile's image missing is
   an error, as today.
 
 ## 5. The boot
@@ -124,7 +124,7 @@ signature against that same digest with `TPM2_VerifySignature`, and uses the
 one that verifies. Only the approval of the image that booted can verify,
 since the digest comes from the live PCRs. At most three VerifySignature
 calls, no extra NV reads, no change for the boot key, the release key or the
-remote salt, which all authorize through this session.
+phone salt, which all authorize through this session.
 
 A mismatch is explained as today, against the profile whose PCR 11 is
 closest (all PCRs equal but 11: "an image that is not one of the slot's
@@ -134,7 +134,7 @@ profiles booted").
 
 The phone pins PCR values per *profile* already: an unexpected change asks
 for approval, and an approved state is added to the machine's record
-(`attest/verifier.go`). The first boot of a second image therefore asks once
+(`core/attest/verifier.go`). The first boot of a second image therefore asks once
 on the phone and is known afterwards. Announcing the profiles at enrolment
 (the machine predicts each image's values, the phone pins them all) is a
 later improvement, not part of this plan.
@@ -149,7 +149,7 @@ later improvement, not part of this plan.
 - **Three profiles.** Enough for default and fallback with room to spare;
   the per-index limit makes more impractical anyway.
 - **One kernel per image.** A profile is an image path. A kernel update
-  rewrites the image in place and the reseal follows, as today.
+  rewrites the image in place and the approval follows, as today.
 
 ## 8. Blob format (step 2)
 
@@ -179,8 +179,8 @@ same way. The blob version is raised; existing slots are sealed again
    defaults instead of a record in every blob, and every write is checked
    against the TPM's NV index limit before the old index is touched. A
    phone is refused only when the blob with *that* phone would not fit.
-2. **Profiles in the blob**: format (§8), `seal` and `reseal` signing every
-   profile, the fit check per profile (§3.2), `info` and `status` listing
+2. **Profiles in the blob**: format (§8), `slot add` and `slot approve` signing every
+   profile, the fit check per profile (§3.2), `slot info` and `status` listing
    them.
 3. **The boot**: `approvedSession` choosing the approval that verifies (§5),
    mismatch explanation per profile.
@@ -194,7 +194,7 @@ same way. The blob version is raised; existing slots are sealed again
    image checks - the hook built in, the image newer than the boot, a
    file it is built from changed after it, the phone's Bluetooth part in
    it - look at the first preset's `default_uki` (or `default_image`)
-   alone (`mkinitcpioImages`, `cmd/initramfs_hooks.go`); a fallback or a
+   alone (`mkinitcpioImages`, `internal/admin/initramfs_hooks.go`); a fallback or a
    further profile is not looked at, so a stale one goes unnoticed and an
    image outside the presets' build list cannot raise a false alarm. With
    profiles every image matters. Proposed: the overview's Boot image line

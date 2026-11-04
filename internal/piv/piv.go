@@ -1,4 +1,4 @@
-// Package piv implements the read-and-sign subset of the PIV smart card
+// package piv implements the read-and-sign subset of the PIV smart card
 // applet, with the YubiKey extensions tpm2-kira needs to identify a token.
 //
 // It never writes to a card: there is no key generation, no certificate
@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+
+	"github.com/mrwiora/tpm2-kira/internal/wipe"
 )
 
 // Transport sends one APDU and returns the response including SW1 SW2.
@@ -146,20 +148,24 @@ func (c *Card) PINRetries() (remaining int, verified bool, err error) {
 	return 0, false, err
 }
 
+// The length of a PIV PIN.
+const (
+	MinPINLength = 6
+	MaxPINLength = 8
+)
+
 // VerifyPIN verifies the PIV PIN. A rejected PIN returns *WrongPINError and
 // costs one attempt; callers must not retry it.
-func (c *Card) VerifyPIN(pin string) error {
-	if len(pin) < 6 || len(pin) > 8 {
+func (c *Card) VerifyPIN(pin []byte) error {
+	if len(pin) < MinPINLength || len(pin) > MaxPINLength {
 		// Refused here, without a round trip: the card counts a
 		// malformed PIN as a wrong one.
-		return fmt.Errorf("a PIV PIN is 6 to 8 characters, got %d", len(pin))
+		return fmt.Errorf("a PIV PIN is %d to %d characters, got %d", MinPINLength, MaxPINLength, len(pin))
 	}
 	data := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 	copy(data, pin)
 	_, err := c.cmd("VERIFY", 0x00, insVerify, 0x00, pinReference, data)
-	for i := range data {
-		data[i] = 0
-	}
+	wipe.Bytes(data)
 	if err == nil {
 		return nil
 	}
@@ -382,13 +388,16 @@ func (c *Card) Certificate(slot Slot) (*x509.Certificate, error) {
 
 // cmd sends one command, using command chaining for data longer than a short
 // APDU allows and GET RESPONSE for replies that do not fit one response.
-// It returns the response data without the status word, or *StatusError.
+// It returns the response data without the status word, or *StatusError. The
+// command it builds holds what data holds, a PIN too: one buffer, wiped on every way
+// out.
 func (c *Card) cmd(op string, cla, ins, p1, p2 byte, data []byte) ([]byte, error) {
 	for len(data) > maxShortAPDUData {
 		chunk := data[:maxShortAPDUData]
 		data = data[maxShortAPDUData:]
 		apdu := append([]byte{cla | 0x10, ins, p1, p2, byte(len(chunk))}, chunk...)
 		_, sw, err := c.transmit(apdu)
+		wipe.Bytes(apdu)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
 		}
@@ -396,7 +405,8 @@ func (c *Card) cmd(op string, cla, ins, p1, p2 byte, data []byte) ([]byte, error
 			return nil, &StatusError{Op: op, SW: sw}
 		}
 	}
-	apdu := []byte{cla, ins, p1, p2}
+	apdu := append(make([]byte, 0, 4+1+len(data)+1), cla, ins, p1, p2)
+	defer wipe.Bytes(apdu)
 	if len(data) > 0 {
 		apdu = append(apdu, byte(len(data)))
 		apdu = append(apdu, data...)

@@ -1,0 +1,470 @@
+package admin
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/mrwiora/tpm2-kira/internal/bootclose"
+	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/mrwiora/tpm2-kira/internal/sbstate"
+	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+)
+
+// 'tpm2-kira status' is the one page a person wants before a reboot: the
+// slots and what they are sealed to, the phones and the phone salt, the
+// LUKS keyslots that are tpm2-kira's with the mode of each - and the notes
+// where these do not fit together (PLAN-LUKS.md §4). It reads; it changes
+// nothing. Without the TPM, or without root for the LUKS headers, it says
+// so for that part and shows the rest.
+
+// StatusOptions is what status takes.
+type StatusOptions struct {
+	TPMPath    string
+	PubKeyPath string // the signing key's public half, which the blobs are checked with
+	ConfigPath string
+	JSON       bool
+	Debug      bool
+}
+
+// StatusSlot is one slot of the report.
+type StatusSlot struct {
+	Slot        int            `json:"slot_number"`
+	NVRAMIndex  string         `json:"nvram_index"`
+	PCRs        string         `json:"pcrs"`
+	Fallback    bool           `json:"fallback"` // sealed to 0 and 7 alone (7, 8 and 9 on GRUB)
+	TOTP        bool           `json:"totp"`     // the slot shows a TOTP code (a method of its own)
+	Generation  uint64         `json:"generation"`
+	GenState    string         `json:"generation_state"`
+	Signed      bool           `json:"signed"` // by this machine's signing key
+	SignReason  string         `json:"sign_reason,omitempty"`
+	Phones      int            `json:"phones"`                 // enrolled
+	PhoneSalt   bool           `json:"remote_salt"`            // the release key is in the blob
+	Vault       string         `json:"vault,omitempty"`        // the vault's URL: the slot is enrolled with one
+	VaultPepper bool           `json:"vault_pepper,omitempty"` // its key needs an operator's pepper
+	VaultRecipe diskkey.Recipe `json:"vault_recipe,omitempty"` // the recipe the vault method was enrolled for
+	VaultPin    string         `json:"-"`                      // the vault's key pin, for control's check
+	VaultDevice []byte         `json:"-"`                      // the device ID the vault knows this machine by
+	TPMSalt     bool           `json:"tpm_salt,omitempty"`     // the slot holds the salt of recipe 0x1200
+	// LoaderMoved: the approved PCR 4 is not what the next boot will measure.
+	LoaderMoved bool `json:"loader_moved,omitempty"`
+	// ChannelMoved: the phone channel is sealed to other values than the next boot's.
+	ChannelMoved bool `json:"channel_moved,omitempty"`
+	// NoGRUBPCRs: on a GRUB boot, the slot lacks PCR 8 or 9 (GRUBPCRs).
+	NoGRUBPCRs bool `json:"no_grub_pcrs,omitempty"`
+}
+
+// StatusReport is the whole report.
+type StatusReport struct {
+	Version      string             `json:"version"`
+	TPM          string             `json:"tpm"`
+	TPMError     string             `json:"tpm_error,omitempty"`
+	Slots        []StatusSlot       `json:"slots"`
+	Config       string             `json:"config"`
+	ConfigError  string             `json:"config_error,omitempty"`
+	Devices      []LuksDeviceStatus `json:"devices"`
+	DevicesError string             `json:"devices_error,omitempty"`
+	Dirt         []DirtySlot        `json:"incomplete_slots,omitempty"`
+	// GRUB: this boot was GRUB's; GRUBPassword: its entries need a
+	// superuser's password to be edited (GRUBPasswordErr: grub.cfg not read).
+	GRUB bool `json:"grub,omitempty"`
+	// ClosePCREvents: events in PCR 15 in this boot's firmware event log.
+	ClosePCREvents int `json:"close_pcr_events,omitempty"`
+	// CloseFinding: this boot's close went another way than PCR 15, or not yet.
+	CloseFinding    string `json:"close_finding,omitempty"`
+	GRUBPassword    bool   `json:"grub_password,omitempty"`
+	GRUBPasswordErr string `json:"grub_password_error,omitempty"`
+	// SecureBootWarning: what is wrong with Secure Boot, in one line; control judges
+	// the same state on its own line.
+	SecureBootWarning string   `json:"secure_boot_warning,omitempty"`
+	Notes             []string `json:"notes"`
+}
+
+// Status prints the report.
+func Status(o StatusOptions) error {
+	r := collectStatus(o)
+	if o.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(r)
+	}
+	printStatus(r)
+	return nil
+}
+
+// collectStatus gathers the report; every part that cannot be read says
+// so in its error field, and the notes are the checks across the parts.
+func collectStatus(o StatusOptions) StatusReport {
+	r := StatusReport{Version: nvslot.AppVersion, TPM: o.TPMPath, Slots: []StatusSlot{}, Devices: []LuksDeviceStatus{}, Notes: []string{}}
+	if r.Version == "" {
+		r.Version = "unknown"
+	}
+
+	r.SecureBootWarning = sbstate.Read().Warning()
+	r.ClosePCREvents, _ = firmwareClosePCREvents(closeEventlogPath)
+	r.CloseFinding = bootclose.Finding(nil)
+	if r.GRUB = GRUBBoot(""); r.GRUB {
+		var err error
+		if r.GRUBPassword, err = GRUBPassword(grubCfgPath); err != nil {
+			r.GRUBPasswordErr = err.Error()
+		}
+	}
+	tpmDev, err := tpmdev.Open(o.TPMPath)
+	if err != nil {
+		r.TPMError = fmt.Sprintf("the TPM at %s cannot be opened: %v", o.TPMPath, err)
+	} else {
+		verifier := newBlobVerifier(o.PubKeyPath)
+		for _, idx := range nvslot.FindPopulatedSlots(tpmDev, o.Debug) {
+			raw, sb, err := phonegate.ReadSlot(tpmDev, idx)
+			if errors.Is(err, nvslot.ErrNoRecord) {
+				continue // an incomplete slot: its note is the dirt's
+			}
+			if err != nil {
+				r.Notes = append(r.Notes, fmt.Sprintf("slot %d's record does not read: %v", nvslot.SlotNumber(idx), err))
+				continue
+			}
+			s := StatusSlot{Slot: nvslot.SlotNumber(idx), NVRAMIndex: fmt.Sprintf("0x%08X", idx),
+				PCRs: measure.PCRSpecsToString(sb.GetPCRSpecs()), Generation: sb.Payload.Generation,
+				GenState: generationState(tpmDev, idx, sb)}
+			s.Fallback = isFallbackSelection(sb.GetPCRSpecs())
+			s.NoGRUBPCRs = checkGRUBSelection(sb.GetPCRSpecs(), r.GRUB) != nil
+			s.LoaderMoved = loaderMoved(sb)
+			s.TOTP = sb.HasTOTPKey()
+			v := verifier.verify(raw, sb)
+			s.Signed, s.SignReason = v.Verified, v.Reason
+			if att := sb.Payload.Attestation; att != nil && att.Phone.Enabled() {
+				s.Phones = len(att.Phone.Verifiers)
+				s.PhoneSalt = len(att.ReleaseKeyPublic) > 0
+				// An error says the object is unusable; the gate names that.
+				s.ChannelMoved, _ = nvslot.ChannelMoved(tpmDev, sb)
+			}
+			if att := sb.Payload.Attestation; att != nil {
+				s.TPMSalt = len(att.TPMSalt.Credential) > 0
+			}
+			if att := sb.Payload.Attestation; att != nil && att.Vault.Enabled() {
+				s.Vault = att.Vault.URL
+				s.VaultPepper = att.Vault.Pepper
+				s.VaultRecipe = vaultRecipeOf(&att.Vault)
+				s.VaultPin, s.VaultDevice = att.Vault.Pin, att.DeviceID
+			}
+			r.Slots = append(r.Slots, s)
+		}
+		r.CloseFinding = bootclose.Finding(tpmDev)
+		tpmDev.Close()
+	}
+
+	r.Config = o.ConfigPath
+	if _, err := LoadControlConfig(o.ConfigPath); err != nil {
+		r.ConfigError = err.Error()
+	}
+
+	devices, err := luksDevices()
+	if err != nil {
+		r.DevicesError = err.Error()
+	}
+	for _, d := range devices {
+		r.Devices = append(r.Devices, readLuksStatus(d))
+	}
+	if r.TPMError == "" {
+		r.Dirt = dirtyReport(collectDirt(o.TPMPath, r.Devices))
+	}
+
+	r.Notes = append(r.Notes, statusNotes(r)...)
+	// The route of the key, for the devices with a keyslot of ours.
+	var routed []string
+	for _, d := range r.Devices {
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				routed = append(routed, d.Device)
+				break
+			}
+		}
+	}
+	if len(routed) > 0 {
+		if findings, err := RouteFindings(routed, nil, ""); err == nil {
+			for _, f := range findings {
+				if !f.Routed {
+					r.Notes = append(r.Notes, strings.TrimRight(routeText(f), "\n"))
+				}
+			}
+		}
+	}
+	return r
+}
+
+// statusNotes are the checks across the parts: what does not fit, and
+// what to do about it.
+func statusNotes(r StatusReport) []string {
+	var notes []string
+	if diskkey.TestBuildNote != "" {
+		notes = append(notes, diskkey.TestBuildNote)
+	}
+	if r.TPMError == "" && len(r.Slots) == 0 {
+		notes = append(notes, "no slot is sealed: tpm2-kira slot add")
+	}
+	if r.ClosePCREvents > 0 {
+		notes = append(notes, closePCRWhy)
+	}
+	if r.CloseFinding != "" {
+		notes = append(notes, r.CloseFinding)
+	}
+	for _, d := range r.Dirt {
+		notes = append(notes, fmt.Sprintf("slot %d is incomplete - %s left: %s. %s; then seal it again", d.Slot, d.Remains, d.Cause, d.Remedy))
+	}
+	remoteSalt, fallback, codes := false, false, false
+	for _, s := range r.Slots {
+		codes = codes || s.TOTP
+		if !s.Signed {
+			notes = append(notes, fmt.Sprintf("slot %d is not signed by this machine's key (%s): the hooks will not approve it and the gate serves no phone for it", s.Slot, s.SignReason))
+		}
+		if strings.Contains(s.GenState, "NOT") || strings.Contains(s.GenState, "unavailable") {
+			notes = append(notes, fmt.Sprintf("slot %d shows no code until it is approved: tpm2-kira slot approve --nvram %d", s.Slot, s.Slot))
+		}
+		if s.LoaderMoved {
+			notes = append(notes, fmt.Sprintf("slot %d's PCR 4 is not what the next boot will measure (an updated boot loader or image; risk: no slot 0 at the next boot, the fallback's purple): tpm2-kira slot approve", s.Slot))
+		}
+		if s.ChannelMoved {
+			notes = append(notes, fmt.Sprintf("WARNING: slot %d's phone channel is sealed to another PCR %s than the next boot's (a db or dbx update, Secure Boot switched; risk: no gate, the phones find no machine at the next boot; no hook follows it): at a terminal, after looking at what moved it: sudo tpm2-kira slot approve --nvram %d", s.Slot, nvslot.ChannelPCRList(), s.Slot))
+		}
+		if s.NoGRUBPCRs {
+			notes = append(notes, fmt.Sprintf("slot %d lacks PCR 8 or 9 (risk: %s): tpm2-kira slot delete --nvram %d", s.Slot, grubSelectionWhy, s.Slot))
+		}
+		remoteSalt = remoteSalt || s.PhoneSalt
+		fallback = fallback || s.Fallback
+	}
+	switch {
+	case !r.GRUB:
+	case r.GRUBPasswordErr != "":
+		notes = append(notes, fmt.Sprintf("GRUB's password is not known (%s): without one the GRUB entry can be edited at the console - %s", r.GRUBPasswordErr, GRUBAdvice))
+	case !r.GRUBPassword:
+		notes = append(notes, "GRUB has no password (risk: the GRUB entry can be edited at the console): "+GRUBAdvice)
+	}
+	if r.TPMError == "" && codes && !fallback {
+		sel := defaultFallbackSelection("")
+		if r.GRUB {
+			sel = GRUBFallbackPCRSelection
+		}
+		notes = append(notes, fmt.Sprintf("no fallback slot (PCRs %s alone) for a boot whose firmware or option ROMs changed: tpm2-kira slot add --nvram %d --pcrs %s", sel, FallbackSlot, sel))
+	}
+
+	slotThere := map[int]bool{}
+	for _, s := range r.Slots {
+		slotThere[s.Slot] = true
+	}
+	marked := map[diskkey.Recipe]int{} // recipe -> keyslots marked with it, over every device
+	headersRead := r.DevicesError == ""
+	for _, d := range r.Devices {
+		if d.Error != "" {
+			headersRead = false // a header not read: the keyslot checks would be guesses
+		}
+		plain := false
+		for _, ks := range d.Keyslots {
+			plain = plain || ks.Token == nil
+		}
+		if d.Error == "" && len(d.Keyslots) > 0 && !plain {
+			notes = append(notes, fmt.Sprintf("%s: every keyslot is tpm2-kira's - the operating system's own prompt, the last way in when tpm2-kira itself fails, opens nothing: add a plain passphrase (cryptsetup luksAddKey %s)", d.Device, d.Device))
+		}
+		for _, o := range d.Orphans {
+			notes = append(notes, fmt.Sprintf("%s token %d (%s) points at no existing keyslot - a leftover: cryptsetup token remove --token-id %d %s", d.Device, o.ID, o.Type, o.ID, d.Device))
+		}
+		for _, ks := range d.Keyslots {
+			if ks.Token == nil {
+				continue
+			}
+			if ks.Token.Obsolete {
+				notes = append(notes, fmt.Sprintf("%s keyslot %d carries another version's token (type %s): cryptsetup token remove --token-id %d %s, then enrol the keyslot again (tpm2-kira luks remove, luks enrol)", d.Device, ks.Keyslot, ks.Token.Type, ks.TokenID, d.Device))
+				continue
+			}
+			marked[ks.Token.Recipe]++
+			if r.TPMError != "" || ks.Token.Slot == nil {
+				continue // bound to no slot: nothing of the TPM to check
+			}
+			if !slotThere[*ks.Token.Slot] {
+				notes = append(notes, fmt.Sprintf("%s keyslot %d is bound to slot %d, which is gone - the slot is dirty: 'tpm2-kira control' (the slot's line) deletes what is left, or tpm2-kira luks remove %s --keyslot %d by hand", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+				continue
+			}
+			if ks.Token.Recipe.FromVault() {
+				ok := false
+				for _, s := range r.Slots {
+					if s.Slot == *ks.Token.Slot && s.Vault != "" {
+						ok = true
+					}
+				}
+				if !ok {
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the vault of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+				}
+			}
+			if ks.Token.Recipe == diskkey.RecipeTPMSalt {
+				ok := false
+				for _, s := range r.Slots {
+					if s.Slot == *ks.Token.Slot && s.TPMSalt {
+						ok = true
+					}
+				}
+				if !ok {
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the TPM salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+				}
+			}
+			if ks.Token.Recipe == diskkey.RecipePhoneSalt {
+				ok := false
+				for _, s := range r.Slots {
+					if s.Slot == *ks.Token.Slot && s.PhoneSalt {
+						ok = true
+					}
+				}
+				if !ok {
+					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the phone salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
+				}
+			}
+		}
+	}
+	vault := false
+	for _, s := range r.Slots {
+		vault = vault || s.Vault != ""
+	}
+	vaultMarked := 0
+	for _, vr := range diskkey.VaultRecipes {
+		vaultMarked += marked[vr]
+	}
+	if vault && headersRead && vaultMarked == 0 {
+		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked with a vault recipe: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --salt vault ...)")
+	}
+	if remoteSalt && headersRead && marked[diskkey.RecipePhoneSalt] == 0 {
+		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked with the phone's salt: the phone's salt opens nothing (tpm2-kira luks enrol <device> "+diskkey.RecipePhoneSalt.Words()+")")
+	}
+	return notes
+}
+
+func printStatus(r StatusReport) {
+	fmt.Printf("tpm2-kira %s\n\n", r.Version)
+	if r.SecureBootWarning != "" {
+		fmt.Println(statusRed(r.SecureBootWarning))
+		fmt.Println()
+	}
+	fmt.Printf("Slots (%s)\n", r.TPM)
+	if r.TPMError != "" {
+		fmt.Printf("  %s\n", r.TPMError)
+	} else if len(r.Slots) == 0 {
+		fmt.Println("  none sealed")
+	}
+	for _, s := range r.Slots {
+		pcrs := s.PCRs
+		if s.Fallback {
+			pcrs += " (the fallback)"
+		}
+		signed := "signed by this machine's key"
+		if !s.Signed {
+			signed = "NOT signed by this machine's key"
+		}
+		fmt.Printf("  slot %-2d  sealed to %s; generation %s; %s\n", s.Slot, pcrs, s.GenState, signed)
+		fmt.Printf("           methods: %s\n", slotMethods(s))
+		switch {
+		case s.Phones > 0 && s.PhoneSalt:
+			fmt.Printf("           %s; phone salt enrolled\n", phonesText(s.Phones))
+		case s.Phones > 0:
+			fmt.Printf("           %s; no phone salt\n", phonesText(s.Phones))
+		}
+		if s.Vault != "" {
+			fmt.Printf("           enrolled with the vault at %s (%s)\n", s.Vault, s.VaultRecipe.Describe())
+		}
+	}
+	fmt.Println()
+	fmt.Println("Disk unlock (how a key is made is in each device's LUKS header)")
+	if r.ConfigError != "" {
+		fmt.Printf("  %s: %s\n", r.Config, r.ConfigError)
+	}
+	if r.DevicesError != "" {
+		fmt.Printf("  %s\n", r.DevicesError)
+	}
+	for _, d := range r.Devices {
+		if d.Error != "" {
+			fmt.Printf("  %s: %s\n", d.Device, d.Error)
+			continue
+		}
+		var parts []string
+		for _, ks := range d.Keyslots {
+			parts = append(parts, "keyslot "+strconv.Itoa(ks.Keyslot)+": "+shortKeyslot(ks))
+		}
+		for _, o := range d.Orphans {
+			parts = append(parts, fmt.Sprintf("token %d (%s): no keyslot, a leftover", o.ID, o.Type))
+		}
+		fmt.Printf("  %s  %s\n", d.Device, strings.Join(parts, "; "))
+	}
+	if len(r.Notes) > 0 {
+		fmt.Println()
+		fmt.Println("Notes")
+		for _, n := range r.Notes {
+			if strings.HasPrefix(n, "WARNING: ") {
+				n = statusRed(n)
+			}
+			fmt.Printf("  - %s\n", n)
+		}
+	}
+}
+
+// statusRed is s in red on a terminal; a pipe gets the words.
+func statusRed(s string) string {
+	if isTerminal(os.Stdout) {
+		return bad(s)
+	}
+	return s
+}
+
+// shortKeyslot is describeKeyslot in a few words.
+func shortKeyslot(ks KeyslotStatus) string {
+	if ks.Token == nil {
+		return "not tpm2-kira's"
+	}
+	if ks.Token.Obsolete {
+		return "another version's token: enrol again (the notes say how)"
+	}
+	if ks.Token.Slot != nil {
+		return fmt.Sprintf("%s (slot %d, label %q)", ks.Token.Recipe.Describe(), *ks.Token.Slot, ks.Token.Label)
+	}
+	return ks.Token.Recipe.Describe()
+}
+
+func quoted(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	return strings.Join(q, ", ")
+}
+
+// phonesText says how many phones attest a slot, without naming them.
+func phonesText(n int) string {
+	if n == 1 {
+		return "attested by 1 phone"
+	}
+	return fmt.Sprintf("attested by %d phones", n)
+}
+
+// slotMethods names a slot's methods: what it holds beside the sealed boot
+// state. A slot with none seals the boot state alone (the machine-id, the
+// boot key).
+func slotMethods(s StatusSlot) string {
+	var m []string
+	if s.TOTP {
+		m = append(m, "TOTP code")
+	}
+	if s.Phones > 0 {
+		m = append(m, phonesText(s.Phones))
+	}
+	if s.Vault != "" {
+		m = append(m, "vault")
+	}
+	if s.TPMSalt {
+		m = append(m, "TPM salt")
+	}
+	if len(m) == 0 {
+		return "none (the boot state alone)"
+	}
+	return strings.Join(m, ", ")
+}
