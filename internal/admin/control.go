@@ -78,6 +78,7 @@ type machineFacts struct {
 	EKNote     string // why none does
 	EKUnknown  bool   // the EK root store has no root of the TPM's vendor yet: a risk, not untrusted
 	SecureBoot sbstate.State
+	Proof      *secureBootProof // what a phone and the vault will establish; nil when it cannot be read
 	// MemoryMiB is the machine's RAM as its kernel counts it, 0 when it could
 	// not be read; below diskkey.MinMemoryMiB the boot's derivation may not fit.
 	MemoryMiB  uint64
@@ -197,6 +198,13 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 		f.PINStored, f.PINLoose = !loose, loose
 	}
 	f.SecureBoot = sbstate.Read()
+	if f.TPMErr == "" {
+		bank := uint16(attest.AlgSHA256)
+		if f.UseSHA1 {
+			bank = attest.AlgSHA1
+		}
+		f.Proof = readSecureBootProof(tpmPath, bank)
+	}
 	f.MemoryMiB = diskkey.MemTotalMiB()
 	if f.TPMErr == "" {
 		f.EKBy, f.EKNote, f.EKUnknown = ekVerdict(tpmPath, debug)
@@ -689,8 +697,8 @@ func (c *controller) noteDescription() string {
 func heading(s string) string { return "\033[1m" + s + "\033[0m" }
 
 // The status is judged line by line: green is good, red is not good and
-// says why - the risk in brackets. What is neither (plain information)
-// stays uncoloured.
+// says why - the risk in brackets, orange a warning with nothing better on
+// this machine. What is none of them (plain information) stays uncoloured.
 func good(s string) string { return "\033[0;32m" + s + "\033[0m" }
 func bad(s string) string  { return "\033[0;31m" + s + "\033[0m" }
 
@@ -711,7 +719,7 @@ func (c *controller) factsText() string {
 	case f.TPMErr != "":
 		fmt.Fprintf(&w, "  TPM         %s\n", bad(fmt.Sprintf("none usable (%s)", f.TPMErr)))
 	case f.UseSHA1:
-		fmt.Fprintf(&w, "  TPM         %s\n", bad(fmt.Sprintf("%s - %s; the SHA-1 bank is used (risk: SHA-1 collisions are practical, a measured boot can in principle be forged)", f.TPM, f.SHA1Why)))
+		fmt.Fprintf(&w, "  TPM         %s\n", warn(fmt.Sprintf("%s - %s; the SHA-1 bank is used (risk: SHA-1 collisions are practical, a measured boot can in principle be forged)", f.TPM, f.SHA1Why)))
 	case f.LogSHA256:
 		fmt.Fprintf(&w, "  TPM         %s\n", good(f.TPM+", SHA-256 bank and event log"))
 	default:
@@ -740,6 +748,13 @@ func (c *controller) factsText() string {
 		fmt.Fprintf(&w, "  Secure Boot %s\n", good("enabled"))
 	default:
 		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("disabled (risk: the boot loader and the kernel run unsigned, and PCR 7 records only that)"))
+	}
+	if f.Proof != nil {
+		if line, ok := f.Proof.text(); ok {
+			fmt.Fprintf(&w, "  Proof       %s\n", good(line))
+		} else {
+			fmt.Fprintf(&w, "  Proof       %s\n", bad(line))
+		}
 	}
 	switch {
 	case f.MemoryMiB == 0:

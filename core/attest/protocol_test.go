@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -615,6 +616,10 @@ func TestVerdictEstablishesSecureBoot(t *testing.T) {
 		{"on", SecureBootOn, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootOn) }},
 		{"off", SecureBootOff, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootOff) }},
 		{"Setup Mode", SecureBootSetupMode, func(s *attesttest.SoftTPM) { s.SetSecureBoot(SecureBootSetupMode) }},
+		{"on, past systemd's OS separator", SecureBootOn, func(s *attesttest.SoftTPM) {
+			s.SetSecureBoot(SecureBootOn)
+			s.PassOSSeparator(AlgSHA256)
+		}},
 		{"no event log", SecureBootNotEstablished, func(s *attesttest.SoftTPM) { s.PCR7Chain = nil }},
 		{"off, the events of on", SecureBootNotEstablished, func(s *attesttest.SoftTPM) {
 			s.SetSecureBoot(SecureBootOff)
@@ -649,5 +654,60 @@ func TestFailedVerdictEstablishesNothing(t *testing.T) {
 	v := Verify(nil, nil, nil, nil, time.Time{})
 	if v.SecureBoot.State != SecureBootNotEstablished {
 		t.Fatalf("%+v", v.SecureBoot)
+	}
+}
+
+// A machine on the SHA-1 bank is a warning beside the state, which comes from its SHA-1 events.
+func TestSHA1BankIsAWarning(t *testing.T) {
+	for _, tc := range []struct {
+		name, want, detail string
+		boot               func(s *attesttest.SoftTPM)
+	}{
+		{"on", SecureBootOn, "", func(s *attesttest.SoftTPM) { s.SetSecureBootSHA1(SecureBootOn) }},
+		{"on, past systemd's OS separator", SecureBootOn, "", func(s *attesttest.SoftTPM) {
+			s.SetSecureBootSHA1(SecureBootOn)
+			s.PassOSSeparator(AlgSHA1)
+		}},
+		{"off", SecureBootOff, "", func(s *attesttest.SoftTPM) { s.SetSecureBootSHA1(SecureBootOff) }},
+		{"no events in that bank", SecureBootNotEstablished, "SHA-1 bank", func(s *attesttest.SoftTPM) {
+			s.SetSecureBootSHA1(SecureBootOn)
+			s.PCR7Chain = nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p := newMachine(t), newPhone(t)
+			m.Sel, _ = NewPCRSelection(AlgSHA1, []int{0, 2, 4, 7})
+			tc.boot(m.TPM)
+			rec := enrol(t, m, p)
+			ev := p.Last(EvNeedAnchorKey)
+			if ev == nil || ev.SecureBoot == nil || ev.SecureBoot.State != tc.want || !ev.SHA1Bank || !strings.Contains(ev.SecureBoot.Detail, tc.detail) {
+				t.Fatalf("at enrolment: %+v", ev)
+			}
+			m.TPM.ResetCount++
+			if _, merr, perr := attestOnce(t, m, p, rec); merr != nil || perr != nil {
+				t.Fatalf("machine %v phone %v", merr, perr)
+			}
+			ev = p.Last(EvVerdict)
+			if ev == nil || ev.Verdict.SecureBoot.State != tc.want || !ev.Verdict.SHA1Bank || ev.Verdict.State != StateMatch {
+				t.Fatalf("the verdict: %+v", ev)
+			}
+		})
+	}
+}
+
+// A machine on SHA-256 is not called SHA-1.
+func TestSHA256BankIsNoWarning(t *testing.T) {
+	m, p := newMachine(t), newPhone(t)
+	m.TPM.SetSecureBoot(SecureBootOn)
+	rec := enrol(t, m, p)
+	if ev := p.Last(EvNeedAnchorKey); ev == nil || ev.SHA1Bank {
+		t.Fatalf("%+v", ev)
+	}
+	m.TPM.ResetCount++
+	if _, merr, perr := attestOnce(t, m, p, rec); merr != nil || perr != nil {
+		t.Fatalf("machine %v phone %v", merr, perr)
+	}
+	if ev := p.Last(EvVerdict); ev == nil || ev.Verdict.SHA1Bank {
+		t.Fatalf("%+v", ev)
 	}
 }

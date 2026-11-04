@@ -41,6 +41,14 @@ import (
 // different or missing certificate does not match an approved value. A firmware's digest over
 // the variable's data alone, not UEFI_VARIABLE_DATA, is no event of any state: it stays
 // not established, as for go-attestation (docs/SECURITY-BACKGROUND.md, §13.5).
+//
+// systemd extends PCR 7 once more, with its OS separator, in the initrd, and logs that in a
+// log of its own: an enrolment or a check on the running system quotes a register past it. So
+// the chain replays to the quoted value, or to it after exactly that one constant, as a verdict
+// compares two values of one boot (SameBootState). It says nothing about the boot, it comes
+// after the firmware's separator where the state is read, and it is a word the verifier knows,
+// no event the machine names. Anything else unlogged in the register stays not established: an
+// extend nobody logged cannot be replayed, and to go round that is to take the machine's word.
 
 // SecureBootFinding is what a verifier established, for people: State is one of the
 // states below; Detail says why, for a state not established.
@@ -102,7 +110,7 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 	case len(pcr7) != size:
 		return notEstablished("the quote does not cover PCR 7")
 	case len(chain) == 0:
-		return notEstablished("the machine gave no events of PCR 7: no event log")
+		return notEstablished("the machine gave no events of PCR 7 in the " + bankName(alg) + " bank: no event log, or a log without that bank")
 	case len(chain) > MaxPCR7Chain || len(chain)%size != 0:
 		return notEstablished("the machine's events of PCR 7 are malformed")
 	}
@@ -114,7 +122,10 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 		cur = d.Sum(nil)
 	}
 	if !bytes.Equal(cur, pcr7) {
-		return notEstablished("the event log does not replay to the quoted PCR 7")
+		past, err := ExtendWord(alg, cur, OSSeparatorWord)
+		if err != nil || !bytes.Equal(past, pcr7) {
+			return notEstablished("the event log does not replay to the quoted PCR 7: something extended the register without logging it")
+		}
 	}
 
 	sum := func(b []byte) []byte {
@@ -166,6 +177,14 @@ func EstablishSecureBoot(alg uint16, pcr7, chain []byte) SecureBootFinding {
 		return SecureBootFinding{State: SecureBootOff}
 	}
 	return notEstablished("the firmware's events of PCR 7 name no SecureBoot variable")
+}
+
+// bankName is a PCR bank in a sentence.
+func bankName(alg uint16) string {
+	if alg == AlgSHA1 {
+		return "SHA-1"
+	}
+	return "SHA-256"
 }
 
 // efiGlobalVariable is EFI_GLOBAL_VARIABLE, {8BE4DF61-93CA-11D2-AA0D-00E098032B8C}, as

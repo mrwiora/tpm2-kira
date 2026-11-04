@@ -39,6 +39,8 @@ type SoftTPM struct {
 	Evlog      []byte
 	// PCR7Chain is what the machine says of PCR 7's events (SetSecureBoot).
 	PCR7Chain []byte
+	// PCRsSHA1 is the SHA-1 bank: all zero but for what it holds.
+	PCRsSHA1 map[uint8][]byte
 	// Initrd is what it says of the initrd's events, at enrolment (SetInitrd).
 	Initrd attest.InitrdEvents
 
@@ -220,7 +222,13 @@ func (s *SoftTPM) Extend(idx uint8, data string) {
 func (s *SoftTPM) Quote(qd []byte, sel attest.PCRSelection) (*attest.QuoteResult, error) {
 	var vals []attest.PCRValue
 	for _, i := range sel.Indices {
-		vals = append(vals, attest.PCRValue{Index: i, Digest: append([]byte(nil), s.PCRs[i]...)})
+		v := s.PCRs[i]
+		if sel.Alg == attest.AlgSHA1 {
+			if v = s.PCRsSHA1[i]; v == nil {
+				v = make([]byte, 20)
+			}
+		}
+		vals = append(vals, attest.PCRValue{Index: i, Digest: append([]byte(nil), v...)})
 	}
 	att := tpm2.TPMSAttest{
 		Magic:           tpm2.TPMGeneratedValue,
@@ -273,6 +281,27 @@ func (s *SoftTPM) BootContext() attest.BootContext {
 func (s *SoftTPM) SetSecureBoot(state string) {
 	s.PCR7Chain = SecureBootChain(attest.AlgSHA256, state)
 	s.PCRs[7] = ReplayChain(attest.AlgSHA256, s.PCR7Chain)
+}
+
+// SetSecureBootSHA1 boots the firmware in a state on a TPM whose PCR 7 and log are on the
+// SHA-1 bank.
+func (s *SoftTPM) SetSecureBootSHA1(state string) {
+	s.PCR7Chain = SecureBootChain(attest.AlgSHA1, state)
+	s.PCRsSHA1 = map[uint8][]byte{7: ReplayChain(attest.AlgSHA1, s.PCR7Chain)}
+}
+
+// PassOSSeparator is systemd's OS separator, extended into PCR 7 and logged nowhere the
+// machine sends. alg is the bank that holds the boot.
+func (s *SoftTPM) PassOSSeparator(alg uint16) {
+	bank := s.PCRs
+	if alg == attest.AlgSHA1 {
+		bank = s.PCRsSHA1
+	}
+	past, err := attest.ExtendWord(alg, bank[7], attest.OSSeparatorWord)
+	if err != nil {
+		panic(err)
+	}
+	bank[7] = past
 }
 
 // SecureBootChain is the chain of a firmware in a state: attest.SecureBootOn, Off or

@@ -407,7 +407,12 @@ quote's bank, concatenated in the log's order. The phone believes them only as f
 they replay to the quoted PCR 7, and reads Secure Boot's state from them with its own
 hashes of `UEFI_VARIABLE_DATA` (`attest.EstablishSecureBoot`,
 docs/SECURITY-BACKGROUND.md §13.5); anything else the machine could say of the state is
-not on the wire. The same field is in the EnrolOffer's `boot_context`.
+not on the wire. The same field is in the EnrolOffer's `boot_context`. A running system's
+PCR 7 is past systemd's `os-separator`, which is in no firmware's log: the digests replay to
+the quoted value, or to it after exactly that one constant.
+
+The verdict and the enrolment event carry `sha1_bank` when the selection is on the SHA-1
+bank: a warning beside the state, that decides nothing.
 
 #### 7.3.4 EventlogRequest (0x04)
 

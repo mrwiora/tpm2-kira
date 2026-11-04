@@ -271,3 +271,37 @@ func TestVerifyReleaseSignedPCR(t *testing.T) {
 		t.Fatal("a signed PCR outside the selection")
 	}
 }
+
+// The vault's check is the shared one: a register past systemd's OS separator, on either bank,
+// establishes the state its events say, and an unlogged extend beyond that one establishes nothing.
+func TestReleaseEstablishesPastTheOSSeparator(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		alg  uint16
+		boot func(s *attesttest.SoftTPM)
+	}{
+		{"SHA-256", attest.AlgSHA256, func(s *attesttest.SoftTPM) { s.SetSecureBoot(attest.SecureBootOn) }},
+		{"SHA-1", attest.AlgSHA1, func(s *attesttest.SoftTPM) { s.SetSecureBootSHA1(attest.SecureBootOn) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMachine(t)
+			m.dev.Selection = Selection{Alg: tc.alg, Indices: []uint8{0, 7, 11}}
+			tc.boot(m.tpm)
+			m.tpm.PassOSSeparator(tc.alg)
+			id, nonce := "request", bytes.Repeat([]byte{2}, NonceSize)
+			req := m.request(t, id, nonce)
+			req.PCR7Chain = m.tpm.PCR7Chain
+			checked, _ := VerifyRelease(m.dev, nonce, req, 0)
+			if checked == nil || checked.SecureBoot.State != attest.SecureBootOn {
+				t.Fatalf("%+v", checked)
+			}
+			m.tpm.PassOSSeparator(tc.alg)
+			req = m.request(t, id, nonce)
+			req.PCR7Chain = m.tpm.PCR7Chain
+			checked, _ = VerifyRelease(m.dev, nonce, req, 0)
+			if checked == nil || checked.SecureBoot.State != attest.SecureBootNotEstablished {
+				t.Fatalf("two separators: %+v", checked)
+			}
+		})
+	}
+}
