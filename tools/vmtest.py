@@ -2229,14 +2229,18 @@ class Machine:
         return not failed, text
 
 
+SECUREBOOT_VM_LOCK = threading.Lock()
+
+
 def secureboot_vm():
-    """tools/secureboot-vm.py, one module per process."""
-    if "secureboot_vm" not in sys.modules:
-        spec = importlib.util.spec_from_file_location("secureboot_vm", os.path.join(REPO, "tools", "secureboot-vm.py"))
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["secureboot_vm"] = mod
-        spec.loader.exec_module(mod)
-    return sys.modules["secureboot_vm"]
+    """tools/secureboot-vm.py, one module per process; the machines' threads wait for it whole."""
+    with SECUREBOOT_VM_LOCK:
+        if "secureboot_vm" not in sys.modules:
+            spec = importlib.util.spec_from_file_location("secureboot_vm", os.path.join(REPO, "tools", "secureboot-vm.py"))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["secureboot_vm"] = mod
+            spec.loader.exec_module(mod)
+        return sys.modules["secureboot_vm"]
 
 
 def build_channel_fixture(run_dir):
