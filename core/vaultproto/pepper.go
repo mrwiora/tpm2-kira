@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
 // WrappedPepper is the operator's pepper as a release carries it, so that

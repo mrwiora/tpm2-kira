@@ -16,10 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/journal"
-	"github.com/mrwiora/tpm2-kira/internal/screen"
-	"github.com/mrwiora/tpm2-kira/internal/unixsock"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/journal"
+	"github.com/tpm2-trust/tpm2-kira/internal/screen"
+	"github.com/tpm2-trust/tpm2-kira/internal/unixsock"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 
 	"golang.org/x/sys/unix"
 )

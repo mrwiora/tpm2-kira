@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 )
 
 // The notes say what does not fit together, and nothing when all does.

@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/google/go-tpm/tpm2/transport"
-	"github.com/mrwiora/tpm2-kira/core/vaultproto"
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/core/vaultproto"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 // tpm2-kira's PCR key signs PCR 11 of a unified kernel image for the phase

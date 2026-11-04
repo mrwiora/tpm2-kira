@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: tpm2-kira
-Source: https://github.com/mrwiora/tpm2-kira
+Source: https://github.com/tpm2-trust/tpm2-kira
 
 Files: *
 Copyright: Matthias Robert Wiora <matthias@wiora.io>

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/sbstate"
+	"github.com/tpm2-trust/tpm2-kira/internal/sbstate"
 )
 
 // Status: the Secure Boot warning first, once, in a pipe without colour; in JSON too.

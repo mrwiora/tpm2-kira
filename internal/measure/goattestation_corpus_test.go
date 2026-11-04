@@ -17,9 +17,9 @@ import (
 
 	evlog "github.com/google/go-attestation/attest"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest/attesttest"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 )
 
 // core's parsers against other firmware than ours: go-attestation's own test logs, real

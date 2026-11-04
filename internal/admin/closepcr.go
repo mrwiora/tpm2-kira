@@ -3,7 +3,7 @@ package admin
 import (
 	"fmt"
 
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 // The close (PCR 15 extended) ends what every slot object and the SSH CA

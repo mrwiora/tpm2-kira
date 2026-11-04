@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest/attesttest"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 func TestSecureBootProof(t *testing.T) {

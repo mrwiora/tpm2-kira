@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
 	"golang.org/x/sys/unix"
 )
 

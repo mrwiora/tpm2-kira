@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/signing"
+	"github.com/tpm2-trust/tpm2-kira/internal/signing"
 )
 
 // One file holds the radio and the PIN; setAttestBluetooth leaves the

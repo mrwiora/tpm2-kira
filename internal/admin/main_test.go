@@ -7,9 +7,9 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
-	"github.com/mrwiora/tpm2-kira/internal/machineid"
-	"github.com/mrwiora/tpm2-kira/internal/phonegate"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/machineid"
+	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 )
 
 // The tests make key directories and files with the modes they state;

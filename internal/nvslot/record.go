@@ -22,8 +22,8 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 )
 
 // VarGUID is the vendor GUID of tpm2-kira's EFI variables.

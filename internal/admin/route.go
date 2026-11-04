@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 )
 
 // The route of the disk's key: how the initrd is told to take the key

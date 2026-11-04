@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // The Debian side of the key provider (initramfs-tools, cryptsetup's

@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/sbstate"
-	"github.com/mrwiora/tpm2-kira/internal/vaultkey"
 	"github.com/tpm2-trust/assh/hostkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/sbstate"
+	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
 )
 
 // Step 1, the boot chain: the hook, the route, and the way on to step 2,

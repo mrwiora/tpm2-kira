@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/tpm2-trust/go-uefi-slim/efivar"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
 )
 
 // WarnSecureBoot says the state whatever the selection, and once in a command;

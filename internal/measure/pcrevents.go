@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/go-attestation/attest"
 
-	"github.com/mrwiora/tpm2-kira/internal/untrusted"
 	"github.com/tpm2-trust/go-uefi-slim/sigdb"
+	"github.com/tpm2-trust/tpm2-kira/internal/untrusted"
 )
 
 // The event types of the TCG PC Client specification that name something in PCR 7.

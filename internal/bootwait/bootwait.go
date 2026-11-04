@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 )
 
 // SinceFile holds when the first wait began, in nanoseconds of CLOCK_BOOTTIME.

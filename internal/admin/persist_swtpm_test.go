@@ -14,8 +14,8 @@ import (
 	"github.com/tpm2-trust/assh/hostkey"
 	"github.com/tpm2-trust/assh/persist"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 )
 
 // A removal takes only what has tpm2-kira's shape: an index of another

@@ -14,8 +14,8 @@ import (
 	"github.com/tpm2-trust/assh/config"
 	"github.com/tpm2-trust/assh/hostkey"
 
-	"github.com/mrwiora/tpm2-kira/internal/bootclose"
-	"github.com/mrwiora/tpm2-kira/internal/sshscreen"
+	"github.com/tpm2-trust/tpm2-kira/internal/bootclose"
+	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
 )
 
 // swtpmBoots is a software TPM that can be rebooted (TPM2_Startup(CLEAR)

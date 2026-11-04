@@ -1,4 +1,4 @@
-module github.com/mrwiora/tpm2-kira/core
+module github.com/tpm2-trust/tpm2-kira/core
 
 go 1.26.0
 

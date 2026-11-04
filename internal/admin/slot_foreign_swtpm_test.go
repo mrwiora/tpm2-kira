@@ -14,9 +14,9 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/tpm2-trust/assh/persist"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
-	"github.com/mrwiora/tpm2-kira/internal/prompt"
-	"github.com/mrwiora/tpm2-kira/internal/tpmdev"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/prompt"
+	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 )
 
 // A generation index of another shape, read_stclear and without no_da.

@@ -7,7 +7,7 @@ Maintainer: Matthias Robert Wiora <matthias@wiora.io>
 Build-Depends:
  debhelper-compat (= 13),
 Standards-Version: 4.7.0
-Homepage: https://github.com/mrwiora/tpm2-kira
+Homepage: https://github.com/tpm2-trust/tpm2-kira
 Rules-Requires-Root: no
 
 Package: tpm2-kira

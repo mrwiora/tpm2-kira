@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/efivars"
 	"github.com/tpm2-trust/go-uefi-slim/efivar"
+	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
 )
 
 // vars points efivars.Dir at a directory holding the variables given, nil: absent.

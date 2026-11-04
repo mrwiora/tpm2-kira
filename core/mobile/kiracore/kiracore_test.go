@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/core/attest"
-	"github.com/mrwiora/tpm2-kira/core/attest/attesttest"
-	"github.com/mrwiora/tpm2-kira/core/transport/frame"
+	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/core/attest/attesttest"
+	"github.com/tpm2-trust/tpm2-kira/core/transport/frame"
 )
 
 // memLink is the machine's side of a simulated BLE link: fragments it sends

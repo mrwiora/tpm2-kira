@@ -44,7 +44,7 @@ Results are uploaded as a GitHub Actions artifact (`strix-security-report`, reta
 
 | Date | Scope | Codebase state | Duration | Result | Link |
 |------|-------|----------------|----------|--------|------|
-| 2026-02-02 | Full scan | `dev` branch, between releases 0.0.12 and 0.0.13 (PR [#26](https://github.com/mrwiora/tpm2-kira/pull/26), branch `copilot/add-ai-pentest-scan-workflow`) | ~56 min | Completed, report artifact available | [Actions run](https://github.com/mrwiora/tpm2-kira/actions/runs/20994975512/job/62242599102) |
+| 2026-02-02 | Full scan | `dev` branch, between releases 0.0.12 and 0.0.13 (PR [#26](https://github.com/tpm2-trust/tpm2-kira/pull/26), branch `copilot/add-ai-pentest-scan-workflow`) | ~56 min | Completed, report artifact available | [Actions run](https://github.com/tpm2-trust/tpm2-kira/actions/runs/20994975512/job/62242599102) |
 
 The scan report artifact (`strix-security-report`, 23.7 KB) is downloadable from the Actions run linked above.
 

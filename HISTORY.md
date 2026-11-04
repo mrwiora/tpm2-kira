@@ -28,8 +28,8 @@ The README grew to a manual; its details went to `docs/` (`INSTALL.md`, `CONTROL
 - **Debian's package "installs two scripts" and "the binary".** Five scripts, two binaries.
 - **"Arch's kernel does not lock itself down" beside Debian's hibernation.** A real Arch machine
   with Secure Boot on, kernel 7.2.14, logged `Lockdown: tpm2-kira: hibernation is restricted`.
-- **`github.com/mrwiora/tpm2-kira` as the clone URL.** The repository is `tpm2-trust/tpm2-kira`; the
-  Go module keeps its path.
+- **`github.com/mrwiora/tpm2-kira` as the clone URL.** The repository moved to `tpm2-trust/tpm2-kira`,
+  and the Go modules with it (2026-11-04).
 
 ---
 

@@ -17,7 +17,7 @@ func TestBootBinaryHoldsNoAdministration(t *testing.T) {
 		t.Fatalf("go list: %v\n%s", err, out)
 	}
 	for _, dep := range strings.Fields(string(out)) {
-		for _, bad := range []string{"github.com/mrwiora/tpm2-kira/internal/admin", "github.com/mrwiora/tpm2-kira/internal/prompt"} {
+		for _, bad := range []string{"github.com/tpm2-trust/tpm2-kira/internal/admin", "github.com/tpm2-trust/tpm2-kira/internal/prompt"} {
 			if dep == bad || strings.HasPrefix(dep, bad) {
 				t.Errorf("tpm2-kira-boot depends on %s", dep)
 			}

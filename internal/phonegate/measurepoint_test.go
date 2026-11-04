@@ -3,7 +3,7 @@ package phonegate
 import (
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/measure"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 func TestMeasurePointSpecs(t *testing.T) {

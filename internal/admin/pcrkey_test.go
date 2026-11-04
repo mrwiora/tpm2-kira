@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/measure"
 	"github.com/tpm2-trust/assh/config"
+	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 )
 
 // usePCRKey points the PCR key's paths into a temporary directory and makes it.

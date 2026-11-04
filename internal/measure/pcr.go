@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mrwiora/tpm2-kira/internal/untrusted"
+	"github.com/tpm2-trust/tpm2-kira/internal/untrusted"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"

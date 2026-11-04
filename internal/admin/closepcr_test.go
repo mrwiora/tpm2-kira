@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mrwiora/tpm2-kira/internal/nvslot"
+	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 )
 
 // logWithClosePCREvent is the Arch test log with one more event, in PCR 15, in

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/admin"
-	"github.com/mrwiora/tpm2-kira/internal/diskkey"
+	"github.com/tpm2-trust/tpm2-kira/internal/admin"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 )
 
 // The real systemd-cryptsetup unlocks a LUKS2 volume with the key it reads

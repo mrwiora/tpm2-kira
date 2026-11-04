@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/mrwiora/tpm2-kira/internal/sbstate"
 	"github.com/tpm2-trust/go-uefi-slim/efivar"
+	"github.com/tpm2-trust/tpm2-kira/internal/sbstate"
 )
 
 // AdvisoryWarnings switches the advisory warnings of seal and reseal (a

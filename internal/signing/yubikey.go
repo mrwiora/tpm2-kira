@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/pcsc"
-	"github.com/mrwiora/tpm2-kira/internal/piv"
-	"github.com/mrwiora/tpm2-kira/internal/wipe"
+	"github.com/tpm2-trust/tpm2-kira/internal/pcsc"
+	"github.com/tpm2-trust/tpm2-kira/internal/piv"
+	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
 
 // ── Key file stub ────────────────────────────────────────────────────────────

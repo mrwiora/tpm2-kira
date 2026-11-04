@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrwiora/tpm2-kira/internal/journal"
+	"github.com/tpm2-trust/tpm2-kira/internal/journal"
 )
 
 // TestMain is also the radio worker of TestRadioWorker: the test binary,
