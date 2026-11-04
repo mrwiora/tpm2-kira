@@ -8,8 +8,8 @@ require (
 	github.com/mrwiora/tpm2-kira/core v0.0.0
 	github.com/tpm2-trust/assh v0.0.0
 	github.com/tpm2-trust/go-uefi-slim v0.0.0
-	golang.org/x/crypto v0.57.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/sys v0.49.0
 	rsc.io/qr v0.2.0
 )
 
