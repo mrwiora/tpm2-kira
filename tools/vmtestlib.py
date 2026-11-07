@@ -388,4 +388,26 @@ class Phone:
         out_path = os.path.join(self.log_dir, f"phone-{self.n:02d}-{stage}.log")
         f = open(out_path, "w")
         proc = subprocess.Popen([self.adb_path, "-s", self.serial, *cmd, self.RUNNER], stdout=f, stderr=subprocess.STDOUT)
+        threading.Thread(target=self.capture, args=(proc, f"phone-{self.n:02d}-{stage}"), daemon=True).start()
         return PhoneStage(self, stage, proc, out_path)
+
+    def capture(self, proc, prefix, every=1.5):
+        """The screens the stage shows, while it runs: a screenshot every so often, each new one
+        kept (log_dir/phone-screens). A window Marify keeps out of screenshots (the one-time
+        keyboard, FLAG_SECURE) comes out black: by design."""
+        out = os.path.join(self.log_dir, "phone-screens")
+        os.makedirs(out, exist_ok=True)
+        seen, n = set(), 0
+        while proc.poll() is None:
+            try:
+                png = subprocess.run([self.adb_path, "-s", self.serial, "exec-out", "screencap", "-p"],
+                                     capture_output=True, timeout=20).stdout
+            except subprocess.TimeoutExpired:
+                png = b""
+            digest = hashlib.sha256(png).digest()
+            if png.startswith(b"\x89PNG") and digest not in seen:
+                seen.add(digest)
+                n += 1
+                with open(os.path.join(out, f"{prefix}-{n:02d}.png"), "wb") as f:
+                    f.write(png)
+            time.sleep(every)

@@ -222,6 +222,16 @@ A scenario that fails does not end the others: the machine goes back to the setu
 next goes on from there; one that needs it is not run. Only a machine that does not come back ends
 the run.
 
+### The screens of a run
+
+Each scenario keeps what was on the screens in `screens/NN-scenario/` of the machine's run
+directory: the console as it came from the serial port (`console.ansi`), every session's
+transcript (`session-*.log`: control and the other commands; `boot-*.log`: the code screen over
+SSH), and with a phone (`--phone`, `tools/phone-vm-test.py`) a screenshot of each new screen the app
+showed (`phone-*.png`; the one-time keyboard is kept out of screenshots by the app and comes out
+black). `tools/screens.py RUN_DIR` draws the texts as terminal pictures (SVG) and writes
+`screens.html` with every picture by machine and scenario. Nothing in it is checked.
+
 ### Iterating from a saved setup
 
 A final proof starts from the snapshot `fresh`. To work on a scenario, on the machines of

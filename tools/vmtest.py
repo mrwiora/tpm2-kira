@@ -49,6 +49,7 @@ import configparser
 import datetime
 import fcntl
 import glob
+import shutil
 import hashlib
 import hmac
 import importlib.util
@@ -2030,7 +2031,9 @@ WantedBy=sysinit.target
         self.done.append(entry)
         self.write_scenarios()
         start, failed, issues = time.monotonic(), len([c for c in self.rep.checks if c[1] == "FAIL"]), len(self.rep.issues)
+        shots = self.screens_begin()
         ok = self.run_step(name, step)
+        self.screens_end(name, shots)
         entry["seconds"] = round(time.monotonic() - start, 1)
         new = self.rep.issues[issues:]
         if not ok or len([c for c in self.rep.checks if c[1] == "FAIL"]) > failed:
@@ -2043,6 +2046,33 @@ WantedBy=sysinit.target
         self.log.say(f"[{self.name}] scenario {name}: {entry['seconds']:.0f} s" + (f" of {entry['budget']}" if entry["budget"] else "") + f", {entry['result']}")
         self.write_scenarios()
         return ok
+
+    def screens_begin(self):
+        """Where this scenario's screens start: the console's offset, the time."""
+        lv = getattr(self, "lv", None)
+        serial = lv.path("serial.log") if lv else None
+        return (serial, os.path.getsize(serial) if serial and os.path.exists(serial) else 0, time.time())
+
+    def screens_end(self, name, shots):
+        """The scenario's screens, for tools/screens.py: the console as it came (ANSI and all),
+        every session it had (SSH at boot, control), the phone's screenshots, in
+        screens/NN-name/ of the machine's run directory. Nothing is checked here."""
+        serial, offset, since = shots
+        out = os.path.join(self.dir, "screens", f"{len(self.done):02d}-{name}")
+        try:
+            os.makedirs(out, exist_ok=True)
+            if serial and os.path.exists(serial):
+                with open(serial, "rb") as f:
+                    f.seek(offset)
+                    data = f.read()
+                with open(os.path.join(out, "console.ansi"), "wb") as f:
+                    f.write(data)
+            for path in sorted(glob.glob(os.path.join(self.dir, "session-*.log")) + glob.glob(os.path.join(self.dir, "boot-*.log"))
+                               + glob.glob(os.path.join(self.dir, "phone-screens", "*.png"))):
+                if os.path.getmtime(path) >= since:
+                    shutil.copy(path, out)
+        except OSError as e:
+            self.log.say(f"[{self.name}] the screens of {name} are not kept: {e}")
 
     def run_steps(self, steps):
         """Each scenario in its order. A failed one is said, the machine goes back to the setup and
