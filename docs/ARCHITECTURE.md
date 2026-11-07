@@ -22,7 +22,7 @@ flowchart TB
     PHONE["phone enrol, phone salt enrol<br/>Marify at the machine, Bluetooth LE"]
     LUKS["luks enrol<br/>a keyslot and its token: how its key is made"]
     VAULT["luks enrol --salt vault<br/>this TPM + tpm2-kira-vault, over TLS"]
-    INSPECT["status, slot info, slot list, reveal, pcrtips"]
+    INSPECT["status, slot info, slot list, pcrtips"]
   end
 
   subgraph BUILD["Image build (hooks)"]
@@ -156,8 +156,8 @@ flowchart BT
 
 | Binary | Commands | Pages |
 |---|---|---|
-| `tpm2-kira` | `control`, `setup`, `slot …`, `status`, `phone …`, `luks …`, `vault …`, `initramfs plan`, `reveal`, `yubikey`, `pcrtips` | [README.md](../README.md) "Commands", `tpm2-kira help <command>` |
-| `tpm2-kira-boot` | `run`, `close`, `machine-id`, `unlock-key`, `ssh-child`, `gate-child`, `reveal` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `close`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
+| `tpm2-kira` | `control`, `setup`, `slot …`, `status`, `phone …`, `luks …`, `vault …`, `initramfs plan`, `yubikey`, `pcrtips` | [README.md](../README.md) "Commands", `tpm2-kira help <command>` |
+| `tpm2-kira-boot` | `run`, `close`, `machine-id`, `unlock-key`, `ssh-child`, `gate-child` | `tpm2-kira-boot help`; the pages: `tpm2-kira help run`, `close`, `unlock-key`, `ssh-child`, `gate-child`; [BOOT-INTEGRATION.md](BOOT-INTEGRATION.md) |
 
 ## At boot
 

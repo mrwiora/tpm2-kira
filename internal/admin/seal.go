@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
@@ -178,7 +179,7 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 			fmt.Println("NOTE: this TPM has no SHA-1, so the TOTP key uses HMAC-SHA256 instead of the")
 			fmt.Println("  usual HMAC-SHA1. The QR code says so (algorithm=SHA256), but some")
 			fmt.Println("  authenticator apps ignore that and then show codes that never match.")
-			fmt.Println("  Check that your app's first code matches 'tpm2-kira reveal' before you rely on it.")
+			fmt.Println("  Check that your app's code matches the one shown below, or the next boot's screen, before you rely on it.")
 			fmt.Println()
 		}
 		if err := addTOTPKey(tpmDev, blob, key, alg, hashAlgo); err != nil {
@@ -204,7 +205,27 @@ func Seal(tpmPath, pcrsStr string, nvramIndex uint32, pubKeyPath, privKeyPath st
 		return nil
 	}
 	showTOTPSecret(key, alg, nvramIndex, measure.PCRSpecsToString(specs))
+	showFirstCode(tpmDev, nvramIndex, debug)
 	return nil
+}
+
+// showFirstCode shows the slot's current code once, for the authenticator to be compared with,
+// while the TPM computes one: in a boot not closed yet (PCR 15) whose state the slot is sealed to,
+// in practice the boot before the first one through the image. Otherwise it says why not, and that
+// the first code is on the next boot's screen.
+func showFirstCode(tpmDev transport.TPM, nvramIndex uint32, debug bool) {
+	fmt.Println()
+	code, _, err := totp.SlotCode(tpmDev, nvramIndex, time.Now(), debug)
+	if err == nil {
+		fmt.Printf("The slot's code now: %s (good for 30 seconds). Your authenticator must show the same.\n", code)
+		return
+	}
+	why := totp.SlotErrorLine(err)
+	if why == "" {
+		why = "this boot is not the state the slot is sealed to"
+	}
+	fmt.Printf("No code in this boot (%s).\n", why)
+	fmt.Println("The first code is on the next boot's code screen: compare it with your authenticator there.")
 }
 
 // newSlot returns a blob with the slot's policy parameters, not yet
@@ -285,9 +306,6 @@ func showTOTPSecret(key []byte, alg tpm2.TPMAlgID, nvramIndex uint32, pcrs strin
 	fmt.Println("Scan QR Code with authenticator app:")
 	fmt.Println()
 	totp.DisplayQRCode(totpSecret, nvramIndex, pcrs, alg)
-	fmt.Println()
-	fmt.Println("To generate TOTP codes:")
-	fmt.Printf("   tpm2-kira reveal --nvram 0x%08X\n", nvramIndex)
 }
 
 // ErrGenerationRaised marks a failure after the slot's generation was raised:

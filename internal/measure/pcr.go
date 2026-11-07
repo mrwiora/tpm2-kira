@@ -188,7 +188,7 @@ type ReadPCRValuesResult struct {
 }
 
 // ReadPCRRegisters reads PCR values directly from TPM registers for the given
-// indices. This is used on the unseal/reveal/run path where neither eventlog
+// indices. This is used on the unseal/run path where neither eventlog
 // nor UKI files are available (e.g. early boot). The result maps each PCR
 // index to its current register digest.
 func ReadPCRRegisters(tpmDev transport.TPM, pcrIndices []int, hashAlgo PCRHashAlgo, debug bool) (map[int][]byte, error) {
@@ -363,7 +363,7 @@ func readEventlogValues(tpmDev transport.TPM, indices []int, hashAlgo PCRHashAlg
 
 // ReadPCRValues reads PCR values from their respective sources (eventlog, UKI
 // UKI and/or TPM registers). This is the single shared implementation used by seal,
-// unseal, reveal and reseal paths.
+// unseal and reseal paths.
 //
 // Values describe tpm2-kira's measure point in the initrd, which is where the TPM
 // checks the policy, not the end of firmware and not the running system.

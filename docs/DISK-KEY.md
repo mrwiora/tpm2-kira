@@ -108,7 +108,7 @@ call.
   `rotate`, `unenrol` (`holdsSecrets`; `secrets_test.go` lists them, and fails on a new
   function in `internal/admin` that comes to something secret). What holds none of it is not
   stopped: `status` and `slot info`, which check the slots' records with the public key alone,
-  `reveal`, `slot list`, `slot status`, `slot delete`, `luks status`, `mark`, `route`,
+  `slot list`, `slot status`, `slot delete`, `luks status`, `mark`, `route`,
   `vault status`, `initramfs plan`. A refused lock is any limit on locked memory
   without `CAP_IPC_LOCK`, however large: a mapping past the limit is fatal for the Go
   runtime, at no place the program could answer. Root has the capability; a

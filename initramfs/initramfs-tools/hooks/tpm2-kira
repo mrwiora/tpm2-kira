@@ -2,8 +2,8 @@
 # initramfs-tools hook: place tpm2-kira into the initramfs image - the disk
 # unlock always, and what the machine uses besides, by the boot plan.
 #
-# No key material is copied. 'reveal' reads the sealed blob from TPM NVRAM and
-# unseals it via the PCR policy branch, so the signing keys stay on the
+# No key material is copied. 'run' reads the sealed blob from TPM NVRAM and
+# has the TPM compute the codes under the slot's policy, so the signing keys stay on the
 # encrypted root where they belong.
 
 set -e

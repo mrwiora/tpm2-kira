@@ -998,6 +998,7 @@ class Machine:
         rc, out = self.run("tpm2-kira setup --local 2>&1", save="setup.log")
         self.check("setup --local makes the signing key", "Setup Complete" in out, out[-400:])
         rc, out = self.run("tpm2-kira slot add --totp 2>&1", save="slot-add.log")
+        added_at = time.time()
         self.check_secure_boot("slot add, two slots", out)
         self.secrets = re.findall(r"^Secret: ([A-Z2-7]+)", out, re.M)
         if not self.check("slot add seals slots %s, each with its secret" % " and ".join(map(str, self.slots)), len(self.secrets) == len(self.slots), out[-600:]):
@@ -1012,18 +1013,16 @@ class Machine:
             self.check("GRUB: slot add refuses a slot without PCRs 8 and 9", "PCR 8 is not selected: on a GRUB boot" in refused, refused[-400:])
         rc, mid = self.run(f"test -e {self.MID_VAR} && echo sealed")
         self.check("slot 0 seals the machine-id in the EFI variable KIRAmachineID", "sealed" in mid and "Sealed the machine-id" in out, out[-400:])
+        # slot add shows each new slot's first code while the TPM computes one, in a boot not
+        # closed yet: the code an authenticator of its secret shows; otherwise why there is none.
+        firsts = re.findall(r"^(?:The slot's code now: (\d{6})|No code in this boot \((.*)\)\.)", out, re.M)
         last = self.slots[-1]
-        rc, out = self.run(f"tpm2-kira reveal-plain --nvram {last} 2>&1 | tail -1", save="reveal.log")
-        at = time.time()
-        m = re.search(r"\b(\d{6})\b", out)
-        if m:
-            self.check(f"slot {last}'s code is the authenticator's (computed from its secret)", code_matches(self.secrets[last], m.group(1), at), out.strip())
+        if len(firsts) == len(self.slots) and firsts[-1][0]:
+            self.check(f"slot add: slot {last}'s first code is the authenticator's (computed from its secret)", code_matches(self.secrets[last], firsts[-1][0], added_at), out[-600:])
         else:
-            # The running system is closed (PCR 15), or past the OS
-            # separator, or the slot's image is predicted for the next boot
-            # (an image rebuilt since this one): no code until then, by design.
-            self.check(f"slot {last}: a code, or none until the next boot (closed, past the OS separator, or predicted)",
-                       "Closed until the next boot" in out or "Locked until the next boot" in out or "PCR Mismatch" in out, out.strip())
+            # The running system is closed (PCR 15), or past the OS separator, or the slot's image
+            # is predicted for the next boot (an image rebuilt since this one): no code until then.
+            self.check(f"slot add: slot {last}: its first code, or why none until the next boot", len(firsts) == len(self.slots), out[-600:])
 
     def inspect(self):
         self.head("the commands that read")
@@ -1313,9 +1312,6 @@ class Machine:
         commands = {
             "oom": ("dmesg | grep -E 'Out of memory|oom-kill' | head -3", f"oom-boot-{n}.log"),
             "status": ("tpm2-kira status --json", f"status-boot{n}.json"),
-            # A slot object refuses in the running system: the TPM computes no
-            # code, by the slot's own policy (PCR 15).
-            "reveal": ("tpm2-kira reveal-plain --nvram 0 2>&1 | tail -2", f"boot{n}-reveal.log"),
             "log": (self.boot_log_command(), f"boot{n}-tpm2-kira.log"),
             # The boot is closed in the running system: PCR 15 extended (the kernel's sysfs
             # view of the TPM's PCRs), by run and the image's close when the code screen was
@@ -1343,8 +1339,6 @@ class Machine:
         self.check(f"boot {n}: every slot is closed until the next boot (PCR 15)", slots and all("closed until the next boot" in s["generation_state"] for s in slots), out[-300:])
         if self.distro == "debian":
             self.check(f"boot {n}: GRUB - every slot includes PCRs 8 and 9", slots and not any(s.get("no_grub_pcrs") for s in slots), out[-300:])
-        out = got["reveal"]
-        self.check(f"boot {n}: slot 0's TOTP key refuses after the boot (closed)", "Closed until the next boot" in out and not re.search(r"^\d{6}$", out, re.M), out.strip())
         out = got["log"]
         self.check(f"boot {n}: run closed the boot when the code screen was over", "the boot is closed (PCR 15)" in out, out[-500:])
         self.check_secure_boot(f"boot {n}: the boot's log", out)

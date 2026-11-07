@@ -345,8 +345,7 @@ func printSlotTree(prefix string, si *slotInfo, multiSlot bool) {
 
 	if !multiSlot {
 		fmt.Println()
-		fmt.Println("Note: For security reasons, the 'slot info' command does not display secrets.")
-		fmt.Println("Use 'tpm2-kira reveal' to generate TOTP codes.")
+		fmt.Println("Note: 'slot info' shows no secret and no code: the codes are on the boot's code screen.")
 	}
 }
 

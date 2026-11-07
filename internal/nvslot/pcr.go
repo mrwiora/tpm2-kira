@@ -8,7 +8,7 @@ import (
 
 // GetCurrentPCRValuesFromRegisters reads current PCR values directly from TPM
 // registers, regardless of the original PCR source stored in the blob. This is
-// used on the unseal/reveal/run path so that neither the eventlog file nor
+// used on the unseal/run path so that neither the eventlog file nor
 // the unified kernel image are required (critical for early-boot).
 // Results are returned in the same order as the blob's PCR digests.
 func GetCurrentPCRValuesFromRegisters(tpmDev transport.TPM, sealedBlob *SealedBlob, debug bool) ([]tpm2.TPM2BDigest, error) {

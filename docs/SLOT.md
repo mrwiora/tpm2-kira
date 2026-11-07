@@ -200,7 +200,7 @@ Up to sixteen slots, `--nvram N`: [SEALING.md](SEALING.md#multiple-slots).
 
 ## Approving a new boot state: `slot approve`
 
-When PCR values change (kernel update, initramfs rebuild, firmware update), the TPM no longer computes codes and `reveal` shows a PCR mismatch. Reseal to approve the new values with your signing key; the key in the TPM, and so your authenticator, stay the same:
+When PCR values change (kernel update, initramfs rebuild, firmware update), the TPM no longer computes codes and the code screen shows a PCR mismatch, with the registers that differ. Reseal to approve the new values with your signing key; the key in the TPM, and so your authenticator, stay the same:
 
 ```bash
 # Uses the default signing key from setup

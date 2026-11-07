@@ -120,8 +120,8 @@ func TestSealDefaultsAndStatus(t *testing.T) {
 		}
 	}
 	for _, slot := range []string{"0", "1"} {
-		if code, out := revealPlainCode(t, tpmPath, slot); code == "" {
-			t.Errorf("reveal-plain slot %s after the default seal gives no code:\n%s", slot, out)
+		if code, out := tpmCode(t, tpmPath, slot); code == "" {
+			t.Errorf("slot %s after the default seal gives no code:\n%s", slot, out)
 		}
 	}
 

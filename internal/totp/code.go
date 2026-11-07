@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/google/go-tpm/tpm2"
@@ -261,12 +260,8 @@ func SlotErrorLine(err error) string {
 	return fmt.Sprintf("No code: %v", err)
 }
 
-// PrintKIRASlots prints TOTP codes in the unified KIRA format with timestamps and PCR details
-func PrintKIRASlots(tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]string) {
-	FprintKIRASlots(os.Stdout, tpmDev, slots, codes)
-}
-
-// FprintKIRASlots is PrintKIRASlots onto w: the console, or an SSH session.
+// FprintKIRASlots prints the slots' lines of the code screen onto w: the console, or an SSH
+// session: the time, then each slot's code, phone state or why it has none.
 func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes map[int]string) {
 	now := time.Now().UTC()
 	timestamp := now.Format("15:04:05")
@@ -318,7 +313,7 @@ func FprintKIRASlots(w io.Writer, tpmDev transport.TPM, slots []NVRAMSlot, codes
 		} else if slot.Phone {
 			fmt.Fprintf(w, "\033[0;33m#%d\033[0m: %s\n", slot.SlotNumber, PhoneSlotText(codes, slot))
 		} else if code, exists := codes[slot.SlotNumber]; exists {
-			// Green slot number for successful reveal
+			// Green slot number: the TPM computed its code
 			fmt.Fprintf(w, "\033[0;32m#%d\033[0m: %s", slot.SlotNumber, code)
 			if slot.AfterSeparator {
 				fmt.Fprint(w, "  (computed after the boot was released: approve to lock it before the OS separator)")
@@ -335,81 +330,6 @@ func PhoneSlotText(codes map[int]string, slot NVRAMSlot) string {
 		return line
 	}
 	return phoneSlotDefault
-}
-
-// PrintPlainSlots prints TOTP codes in plain format (no KIRA header)
-func PrintPlainSlots(slots []NVRAMSlot, codes map[int]string) {
-	for _, slot := range slots {
-		if slot.Error != nil {
-			if line := SlotErrorLine(slot.Error); line != "" {
-				fmt.Printf("#%d: %s\n", slot.SlotNumber, line)
-				continue
-			}
-			// For plain output with errors, show slot number
-			fmt.Printf("#%d: PCR Mismatch\n", slot.SlotNumber)
-		} else if slot.Phone {
-			fmt.Printf("#%d: %s\n", slot.SlotNumber, PhoneSlotText(codes, slot))
-		} else if code, exists := codes[slot.SlotNumber]; exists {
-			// For plain output with codes, only show the code without prefix if single slot
-			if len(slots) == 1 {
-				fmt.Printf("%s\n", code)
-			} else {
-				fmt.Printf("#%d: %s\n", slot.SlotNumber, code)
-			}
-		}
-	}
-}
-
-// HasValidSlots returns true if there are any slots with valid TOTP codes
-func HasValidSlots(slots []NVRAMSlot) bool {
-	for _, slot := range slots {
-		if slot.Error == nil && slot.Code != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// RevealCommand implements the reveal command functionality
-func RevealCommand(tpmPath string, nvramIndex uint32, debug bool, plain bool) {
-	// Open TPM
-	tpmDev, err := tpmdev.Open(tpmPath)
-	if err != nil {
-		PrintKIRAError(fmt.Errorf("failed to open TPM at %s: %w", tpmPath, err))
-		return
-	}
-	defer tpmDev.Close()
-
-	// Cleanup TPM memory
-	tpmdev.Cleanup(tpmDev, debug)
-
-	// Determine if we should scan all slots or just one
-	var slots []NVRAMSlot
-	if nvramIndex == 0 {
-		// Scan all slots in the default range when nvramIndex is 0
-		slots = ScanNVRAMSlots(tpmDev, debug)
-		if len(slots) == 0 {
-			PrintKIRAError(fmt.Errorf("no slot has a TOTP code (tpm2-kira slot add --totp)"))
-			return
-		}
-	} else {
-		// Scan only the specified index
-		slots = ScanNVRAMSlot(tpmDev, nvramIndex, debug)
-		if len(slots) == 0 {
-			PrintKIRAError(fmt.Errorf("no TOTP secret found at NVRAM index 0x%08X", nvramIndex))
-			return
-		}
-	}
-
-	// Generate TOTP codes for valid slots
-	codes, _ := CodesForSlots(slots)
-
-	// Display codes (including slots with PCR mismatches)
-	if plain {
-		PrintPlainSlots(slots, codes)
-	} else {
-		PrintKIRASlots(tpmDev, slots, codes)
-	}
 }
 
 // ErrNoKeyAlgorithm means the TPM supports neither SHA-1 nor SHA-256 HMAC.

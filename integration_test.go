@@ -345,7 +345,7 @@ func TestSealWithoutPrivKey(t *testing.T) {
 	}
 }
 
-// TestSealAndReveal tests seal and reveal workflow
+// TestSealAndReveal: a sealed slot's code, as the TPM computes it
 func TestSealAndReveal(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
@@ -364,10 +364,7 @@ func TestSealAndReveal(t *testing.T) {
 	}
 
 	// Reveal the TOTP code (plain output)
-	stdout, stderr, err := runTPMKira(t, tpmPath,
-		"reveal-plain",
-		"--nvram", testNVRAMIndex,
-	)
+	stdout, stderr, err := slotCode(t, tpmPath, testNVRAMIndex)
 
 	if err != nil {
 		t.Fatalf("Reveal command failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
@@ -395,7 +392,7 @@ func TestGlobalOptionsBeforeCommand(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
 
-	// Slot 3: without --nvram, reveal-plain scans the slots and finds it.
+	// Slot 3, its record read by slot info with the options before the command and after it.
 	if _, _, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", "3", "--pcrs", testPCRs,
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal: %v", err)
@@ -409,13 +406,8 @@ func TestGlobalOptionsBeforeCommand(t *testing.T) {
 		}
 		return strings.TrimSpace(out.String())
 	}
-	isCode := func(s string) bool { return len(s) == 6 && strings.Trim(s, "0123456789") == "" }
-
-	if code := kira("--tpm", tpmPath, "--nvram", "3", "reveal-plain"); !isCode(code) {
-		t.Fatalf("reveal-plain with the options before it: %q", code)
-	}
 	// Slot 4, named before the command, is the only one read: it is empty.
-	if out := kira("--tpm="+tpmPath, "--nvram=4", "--debug", "reveal-plain"); isCode(out) {
+	if out := kira("--tpm="+tpmPath, "--nvram=4", "--debug", "slot", "info", "--json"); strings.Contains(out, `"slot_number": 3`) {
 		t.Fatalf("--nvram=4 before the command read slot 3: %q", out)
 	}
 	before := kira("--tpm", tpmPath, "--nvram", "3", "slot", "info", "--json")
@@ -520,10 +512,7 @@ func TestNVRAMDelete(t *testing.T) {
 	}
 
 	// Verify it no longer exists by trying to reveal
-	stdout, stderr, err = runTPMKira(t, tpmPath,
-		"reveal",
-		"--nvram", testNVRAMIndex,
-	)
+	stdout, stderr, err = slotCode(t, tpmPath, testNVRAMIndex)
 
 	// Check if command failed OR if no valid OTP was returned
 	code := strings.TrimSpace(stdout)
@@ -681,10 +670,7 @@ func TestSealTwiceOverwrites(t *testing.T) {
 	}
 
 	// Verify we can reveal with the new secret
-	stdout3, _, err := runTPMKira(t, tpmPath,
-		"reveal-plain",
-		"--nvram", testNVRAMIndex,
-	)
+	stdout3, _, err := slotCode(t, tpmPath, testNVRAMIndex)
 
 	if err != nil {
 		t.Fatalf("Reveal after second seal failed: %v", err)
@@ -869,10 +855,10 @@ func testSeal(t *testing.T, tpmPath, nvramIndex string) {
 	t.Log("✓ Seal successful")
 }
 
-// testReveal performs a reveal operation and validates the TOTP code
-func testReveal(t *testing.T, tpmPath, nvramIndex string) string {
+// testSlotCode performs a reveal operation and validates the TOTP code
+func testSlotCode(t *testing.T, tpmPath, nvramIndex string) string {
 	t.Helper()
-	stdout, stderr, err := runTPMKira(t, tpmPath, "reveal-plain", "--nvram", nvramIndex)
+	stdout, stderr, err := slotCode(t, tpmPath, nvramIndex)
 	if err != nil {
 		t.Fatalf("✗ Reveal failed: %v\nStdout: %s\nStderr: %s", err, stdout, stderr)
 	}
@@ -983,7 +969,7 @@ func testNVRAMDelete(t *testing.T, tpmPath, nvramIndex string) {
 // testNVRAMDeleted verifies that data no longer exists in NVRAM
 func testNVRAMDeleted(t *testing.T, tpmPath, nvramIndex string) {
 	t.Helper()
-	stdout, stderr, err := runTPMKira(t, tpmPath, "reveal", "--nvram", nvramIndex)
+	stdout, stderr, err := slotCode(t, tpmPath, nvramIndex)
 
 	// Check if command failed OR if no valid OTP was returned
 	code := strings.TrimSpace(stdout)
@@ -1048,7 +1034,7 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Reveal - must be successful
 	t.Log("Testing reveal after seal...")
-	testReveal(t, tpmPath, nvramIndexBasic)
+	testSlotCode(t, tpmPath, nvramIndexBasic)
 
 	// Run - must be running successfully, needs to be killed
 	t.Log("Testing run command (will kill after 3 seconds)...")
@@ -1068,7 +1054,7 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Reveal - must be successful
 	t.Log("Testing reveal after seal...")
-	testReveal(t, tpmPath, nvramIndexReseal)
+	testSlotCode(t, tpmPath, nvramIndexReseal)
 
 	// Reseal (PCRs match, so PCR branch succeeds — no private key strictly needed
 	// but we provide it anyway to store in blob for convenience)
@@ -1077,7 +1063,7 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Verify reveal still works after reseal
 	t.Log("Testing reveal after reseal...")
-	testReveal(t, tpmPath, nvramIndexReseal)
+	testSlotCode(t, tpmPath, nvramIndexReseal)
 
 	// NVRAM delete - must be successful
 	t.Log("Testing slot delete...")
@@ -1113,7 +1099,7 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Reveal - must be successful
 	t.Log("Testing reveal before PCR extension...")
-	testReveal(t, tpmPath, nvramIndexPCR)
+	testSlotCode(t, tpmPath, nvramIndexPCR)
 
 	// Execute tpm2_pcrextend to change PCR 23
 	t.Log("Extending PCR 23 (this will break PCR policy)...")
@@ -1126,10 +1112,7 @@ func TestCompleteWorkflow(t *testing.T) {
 
 	// Reveal after PCR change - should fail (PCR branch fails, no signing key for reveal)
 	t.Log("Testing reveal after PCR extension (should fail - PCR mismatch)...")
-	stdout, stderr, err = runTPMKira(t, tpmPath,
-		"reveal",
-		"--nvram", nvramIndexPCR,
-	)
+	stdout, stderr, err = slotCode(t, tpmPath, nvramIndexPCR)
 
 	// Check if command failed OR if no valid OTP was returned
 	code := strings.TrimSpace(stdout)
@@ -1180,7 +1163,7 @@ func TestCompleteWorkflow(t *testing.T) {
 	t.Log("✓ Reseal approved the new PCR values")
 
 	t.Log("Testing reveal after reseal with new PCR values...")
-	testReveal(t, tpmPath, nvramIndexPCR)
+	testSlotCode(t, tpmPath, nvramIndexPCR)
 
 	// Cleanup
 	t.Log("Testing slot delete for PCR test...")
@@ -1204,13 +1187,13 @@ func TestQuickWorkflow(t *testing.T) {
 	testSeal(t, tpmPath, nvramIndex)
 
 	t.Log("Step 2: Reveal")
-	testReveal(t, tpmPath, nvramIndex)
+	testSlotCode(t, tpmPath, nvramIndex)
 
 	t.Log("Step 3: Reseal (PCRs unchanged, PCR branch succeeds)")
 	testResealSuccess(t, tpmPath, nvramIndex)
 
 	t.Log("Step 4: Reveal again after reseal")
-	testReveal(t, tpmPath, nvramIndex)
+	testSlotCode(t, tpmPath, nvramIndex)
 
 	t.Log("Step 5: Delete")
 	testNVRAMDelete(t, tpmPath, nvramIndex)
@@ -1230,18 +1213,9 @@ func TestExitCodes(t *testing.T) {
 
 	t.Log("=== Testing Exit Codes ===")
 
-	// Test 1: Reveal on non-existent NVRAM (should exit 0 with error message)
-	t.Log("Test 1: Reveal on non-existent NVRAM...")
-	cmd := exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		t.Errorf("✗ Reveal on non-existent NVRAM returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ Reveal on non-existent NVRAM returned exit code 0")
-	}
+	var cmd *exec.Cmd
+	var err error
 
 	// Test 2: Seal and then extend PCR to cause mismatch
 	t.Log("Test 2: Seal with PCR 0,23...")
@@ -1257,20 +1231,6 @@ func TestExitCodes(t *testing.T) {
 	}
 	t.Log("✓ Seal successful")
 
-	// Test 3: Reveal before PCR extension (should work)
-	t.Log("Test 3: Reveal before PCR extension...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ Reveal before PCR extension returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ Reveal before PCR extension returned exit code 0")
-	}
-
 	// Test 4: Extend PCR 23
 	t.Log("Test 4: Extending PCR 23...")
 	extendCmd := exec.Command("tpm2_pcrextend", "23:sha256=0000000000000000000000000000000000000000000000000000000000000000")
@@ -1279,34 +1239,6 @@ func TestExitCodes(t *testing.T) {
 		t.Fatalf("Failed to extend PCR: %v\nOutput: %s", err, output)
 	}
 	t.Log("✓ PCR 23 extended")
-
-	// Test 5: Reveal after PCR extension (should show mismatch but exit 0)
-	t.Log("Test 5: Reveal after PCR extension (with mismatch)...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reveal", "--tpm", tpmPath, "--nvram", nvramIndex)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ Reveal with PCR mismatch returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ Reveal with PCR mismatch returned exit code 0")
-	}
-
-	// Test 6: Reveal-plain with PCR mismatch
-	t.Log("Test 6: Reveal-plain after PCR extension (with mismatch)...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "reveal-plain", "--tpm", tpmPath, "--nvram", nvramIndex)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ Reveal-plain with PCR mismatch returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ Reveal-plain with PCR mismatch returned exit code 0")
-	}
 
 	// Test 7: Info command on slot with PCR mismatch
 	t.Log("Test 7: Info command with PCR mismatch...")
@@ -1403,7 +1335,7 @@ func TestResealNeedsItsKeyGiven(t *testing.T) {
 
 	// With --privkey it works.
 	testResealSuccess(t, tpmPath, nvramIndex)
-	testReveal(t, tpmPath, nvramIndex)
+	testSlotCode(t, tpmPath, nvramIndex)
 
 	// Clean up
 	runTPMKira(t, tpmPath, "slot", "delete", "--nvram", nvramIndex)
@@ -1437,10 +1369,10 @@ func restartSoftwareTPM(t *testing.T, tpmPath string) {
 	}
 }
 
-// revealPlainCode returns the single code reveal-plain prints, or "".
-func revealPlainCode(t *testing.T, tpmPath, nvramIndex string) (string, string) {
+// tpmCode returns the slot's code the TPM computes now (slotCode), or "".
+func tpmCode(t *testing.T, tpmPath, nvramIndex string) (string, string) {
 	t.Helper()
-	stdout, stderr, _ := runTPMKira(t, tpmPath, "reveal-plain", "--nvram", nvramIndex)
+	stdout, stderr, _ := slotCode(t, tpmPath, nvramIndex)
 	code := strings.TrimSpace(stdout)
 	if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
 		return "", stdout + stderr
@@ -1473,9 +1405,9 @@ func TestCodeMatchesAuthenticator(t *testing.T) {
 	// Retry across a 30-second boundary rather than flake on it.
 	for attempt := 0; attempt < 3; attempt++ {
 		before := time.Now().Unix() / 30
-		code, out := revealPlainCode(t, tpmPath, nvramIndex)
+		code, out := tpmCode(t, tpmPath, nvramIndex)
 		if code == "" {
-			t.Fatalf("reveal-plain printed no code:\n%s", out)
+			t.Fatalf("the TPM computed no code:\n%s", out)
 		}
 		if time.Now().Unix()/30 != before {
 			continue
@@ -1509,14 +1441,14 @@ func TestCloseEndsCodesUntilReboot(t *testing.T) {
 		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
 		t.Fatalf("seal failed: %v\n%s\n%s", err, stdout, stderr)
 	}
-	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
+	if code, out := tpmCode(t, tpmPath, nvramIndex); code == "" {
 		t.Fatalf("no code before the close:\n%s", out)
 	}
 
 	if stdout, stderr, err := runBoot(t, "close", "--tpm", tpmPath); err != nil {
 		t.Fatalf("close failed: %v\n%s\n%s", err, stdout, stderr)
 	}
-	code, out := revealPlainCode(t, tpmPath, nvramIndex)
+	code, out := tpmCode(t, tpmPath, nvramIndex)
 	if code != "" || !strings.Contains(out, "Closed until the next boot") {
 		t.Fatalf("expected no code after the close, got %q:\n%s", code, out)
 	}
@@ -1532,13 +1464,13 @@ func TestCloseEndsCodesUntilReboot(t *testing.T) {
 	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("approve while closed failed:\n%s\n%s", stdout, stderr)
 	}
-	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code != "" {
+	if code, out := tpmCode(t, tpmPath, nvramIndex); code != "" {
 		t.Fatalf("an approval opened the closed slot: got code %s\n%s", code, out)
 	}
 	t.Log("✓ Approving works while closed, and the close holds")
 
 	restartSoftwareTPM(t, tpmPath)
-	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
+	if code, out := tpmCode(t, tpmPath, nvramIndex); code == "" {
 		t.Fatalf("no code after the reboot:\n%s", out)
 	}
 	t.Log("✓ Codes are back after a reboot")
@@ -1573,7 +1505,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 	if !strings.Contains(stdout, "Successfully approved the boot state") {
 		t.Fatalf("reseal failed:\n%s\n%s", stdout, stderr)
 	}
-	if code, out := revealPlainCode(t, tpmPath, nvramIndex); code == "" {
+	if code, out := tpmCode(t, tpmPath, nvramIndex); code == "" {
 		t.Fatalf("no code after reseal:\n%s", out)
 	}
 
@@ -1583,7 +1515,7 @@ func TestResealRevokesOldBlob(t *testing.T) {
 		t.Fatalf("restoring the old record: %v", err)
 	}
 
-	code, out := revealPlainCode(t, tpmPath, nvramIndex)
+	code, out := tpmCode(t, tpmPath, nvramIndex)
 	if code != "" || !strings.Contains(out, "Approval revoked") {
 		t.Fatalf("the old blob still yields a code (%q):\n%s", code, out)
 	}
