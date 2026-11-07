@@ -22,6 +22,9 @@ import (
 
 // machineFacts is what the analysis found.
 type machineFacts struct {
+	// Checking: the slow facts (the vaults' answers, the empty passphrase test) are
+	// still being collected (slowFacts); what they decide says "checking".
+	Checking   bool
 	TPM        string
 	TPMErr     string
 	SHA256Bank bool
@@ -115,7 +118,30 @@ type machineFacts struct {
 
 // collectFacts is the analysis.
 func collectFacts(tpmPath string, debug bool) machineFacts {
-	f := machineFacts{TPM: tpmPath, Routed: map[string]bool{}}
+	f := fastFacts(tpmPath, debug)
+	slowFacts(&f)
+	return f
+}
+
+// slowFacts are what takes seconds: each vault asked (up to 5 s), each keyslot's
+// passphrase tried empty (a key derivation each, cached for the run). The full screen
+// shows the rest first, with these "checking".
+func slowFacts(f *machineFacts) {
+	_, f.EmptyPass, f.EmptyPassErr = recoveryFacts(f.Status.Devices, true)
+	for _, s := range f.Status.Slots {
+		if s.Vault != "" {
+			if f.Vaults == nil {
+				f.Vaults = map[int]vaultkey.CheckResult{}
+			}
+			f.Vaults[s.Slot] = vaultkey.Check(s.Vault, s.VaultPin, s.VaultDevice, 5*time.Second)
+		}
+	}
+	f.Checking = false
+}
+
+// fastFacts are the facts but the slow ones (slowFacts), which it marks as checking.
+func fastFacts(tpmPath string, debug bool) machineFacts {
+	f := machineFacts{TPM: tpmPath, Routed: map[string]bool{}, Checking: true}
 
 	if tpmDev, err := tpmdev.Open(tpmPath); err != nil {
 		f.TPMErr = err.Error()
@@ -228,15 +254,9 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 	if f.TPMErr == "" {
 		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
 	}
-	f.NoRecovery, f.EmptyPass, f.EmptyPassErr = recoveryFacts(f.Status.Devices)
+	f.NoRecovery, _, _ = recoveryFacts(f.Status.Devices, false)
 	f.PlainSwap = plainSwaps()
 	for _, s := range f.Status.Slots {
-		if s.Vault != "" {
-			if f.Vaults == nil {
-				f.Vaults = map[int]vaultkey.CheckResult{}
-			}
-			f.Vaults[s.Slot] = vaultkey.Check(s.Vault, s.VaultPin, s.VaultDevice, 5*time.Second)
-		}
 		f.Phone = f.Phone || s.Phones > 0
 		f.Salt = f.Salt || s.PhoneSalt
 	}
@@ -284,7 +304,8 @@ func collectFacts(tpmPath string, debug bool) machineFacts {
 // recoveryFacts judges the keyslots that are not tpm2-kira's: the devices
 // that have none (no recovery passphrase), and those that open with an
 // empty passphrase (an encrypted disk anybody opens).
-func recoveryFacts(devices []LuksDeviceStatus) (noRecovery, empty []string, testErr string) {
+// test false leaves out the empty passphrase test, the slow part.
+func recoveryFacts(devices []LuksDeviceStatus, test bool) (noRecovery, empty []string, testErr string) {
 	for _, d := range devices {
 		if d.Error != "" {
 			continue
@@ -295,6 +316,9 @@ func recoveryFacts(devices []LuksDeviceStatus) (noRecovery, empty []string, test
 				continue
 			}
 			recovery = true
+			if !test {
+				continue
+			}
 			key := d.Device + "|" + strconv.Itoa(ks.Keyslot) + "|" + ks.Salt
 			opens, seen := emptyPassSeen[key]
 			if !seen {
@@ -530,6 +554,8 @@ func (c *controller) factsText() string {
 			continue
 		}
 		switch v := f.Vaults[s.Slot]; {
+		case f.Checking:
+			fmt.Fprintf(&w, "  Vault       slot %d: %s - checking ...\n", s.Slot, s.Vault)
 		case v.Knows:
 			fmt.Fprintf(&w, "  Vault       %s\n", good(fmt.Sprintf("slot %d: %s answers, with the pinned key, and knows this device", s.Slot, s.Vault)))
 		default:

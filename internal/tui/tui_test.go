@@ -20,7 +20,7 @@ func TestFit(t *testing.T) {
 		{"abcdef", 4, "abc\033[0m~"},
 		{"\033[0;32mok\033[0m", 4, "\033[0;32mok\033[0m\033[0m  "},
 		{"a\tb", 3, "a b"},
-		{"✓ x", 4, "✓ x"},
+		{"✓ x", 4, "✓ x "},
 		{"abc", 0, ""},
 	} {
 		if got := Fit(c.in, c.cols, "~"); got != c.want {

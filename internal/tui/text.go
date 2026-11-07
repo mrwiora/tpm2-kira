@@ -30,12 +30,22 @@ func Cells(s string) int {
 	return n
 }
 
-// RuneCells is the columns a character can take at most.
+// RuneCells is the columns a character takes: two for the East Asian wide and
+// full-width ranges and the emoji, one for the rest (box drawing, ✓ and ⚠ among them).
 func RuneCells(r rune) int {
-	if r < 0x1100 {
-		return 1
+	for _, w := range wideRanges {
+		if r >= w[0] && r <= w[1] {
+			return 2
+		}
 	}
-	return 2
+	return 1
+}
+
+// wideRanges are Unicode's East Asian Wide and Fullwidth blocks, and the emoji planes.
+var wideRanges = [][2]rune{
+	{0x1100, 0x115F}, {0x2E80, 0x303E}, {0x3041, 0x33FF}, {0x3400, 0x4DBF}, {0x4E00, 0x9FFF},
+	{0xA000, 0xA4CF}, {0xAC00, 0xD7A3}, {0xF900, 0xFAFF}, {0xFE30, 0xFE4F}, {0xFF00, 0xFF60},
+	{0xFFE0, 0xFFE6}, {0x1F300, 0x1F64F}, {0x1F900, 0x1F9FF}, {0x20000, 0x3FFFD},
 }
 
 // Sanitize keeps a row's count true: a tab is a space, any other control character and

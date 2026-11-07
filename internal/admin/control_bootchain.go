@@ -84,6 +84,8 @@ func (c *controller) prereqs() []prereq {
 			add(prereqMet, "Recovery passphrase: a keyslot that is not tpm2-kira's on every device")
 		}
 		switch {
+		case f.Checking:
+			add(prereqInfo, "Passphrase: checking whether a keyslot opens with an empty one ...")
 		case len(f.EmptyPass) > 0:
 			add(prereqNot, "Passphrase: %s opens with an empty passphrase (risk: anybody with the disk opens it - set one: cryptsetup luksChangeKey --key-slot N DEVICE, Enter at the old one)", strings.Join(f.EmptyPass, ", "))
 		case f.EmptyPassErr != "":

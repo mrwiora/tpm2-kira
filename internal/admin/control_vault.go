@@ -56,6 +56,8 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 			st.Dirty = desc + ", but no keyslot uses it: picking it offers to take the vault out of the slot"
 		case f.Remote.Net.Mode == "off":
 			st.Dirty = desc + ", but the boot image has no network to reach the vault (Network and SSH at boot)"
+		case f.Checking:
+			st.Done = desc + " - asking the vault ..."
 		case !v.Answers:
 			st.Dirty = desc + ": the vault " + v.Problem
 		case !v.Knows:

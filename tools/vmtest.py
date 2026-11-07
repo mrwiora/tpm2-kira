@@ -817,25 +817,44 @@ class Machine:
             s.close()
 
     def control_keys(self):
-        """control on a real terminal of 24 rows and 40 columns: its menu by the arrow keys,
-        drawn and left in place over ssh, and the terminal given back. The session of
-        control() has no size, and so the numbered prompt."""
-        self.head("control's menu by the arrow keys")
+        """control on a real terminal of 24 rows and 40 columns: its full screen - the
+        alternate screen, the sections, the cursor in reverse video - moved by the arrow
+        keys, a step's detail, the keys' help, a resize mid-session over ssh, and the
+        terminal given back as it was on q. The session of control() has no size, and so
+        the numbered line menus."""
+        self.head("control's full screen")
         s = self.session("sudo tpm2-kira control; stty -a", "control-keys", size=(24, 40))
-        menu = r"Enter a number between 1 and \d+: ?$"
         try:
-            s.expect(menu, 120)
-            s.send("\x1b[B"); s.expect(menu, 10)
-            s.send("\x1b[A"); s.expect(menu, 10)
-            raw = s.buf
-            self.check("control: on a terminal with a size the menu is drawn with the cursor", b"\x1b[7m" in raw and b"\x1b[J" in raw, repr(raw[-400:]))
-            s.send("\r")
-            out = s.wait_end(60)
+            s.expect(r"Overview", 120)
+            s.expect(r"Keys & slots", 30)
+            self.check("control: on a terminal with a size, the full screen (the alternate screen, no cursor)",
+                       b"\x1b[?1049h" in s.buf and b"\x1b[?25l" in s.buf, repr(s.buf[-300:]))
+            # Down to Keys & slots, and into it once the facts are in (l moves into a
+            # section and runs nothing): a step's line and detail.
+            s.send("\x1b[B\x1b[B")
+            deadline = time.time() + 180
+            while True:
+                s.send("l")
+                try:
+                    s.expect(r"Signing key", 5)
+                    break
+                except Fail:
+                    if time.time() > deadline:
+                        raise
+            self.check("control: the arrows move the cursor (reverse video)", b"\x1b[7m" in s.buf[s.mark - 2000:], repr(s.buf[-300:]))
+            s.send("?"); s.expect(r"Up, Down", 20)
+            s.send("?")
+            # A resize: ssh carries the window change, control draws the new size.
+            fcntl.ioctl(s.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+            s.expect(r"Overview\s+[│|]", 20)
+            self.check("control: a resize mid-session draws the frame at the new size, the sections beside the steps", True)
+            s.send("q")
+            out = s.wait_end(120)
             self.log.save("control-keys.log", out)
-            self.check("control: Enter takes the entry under the cursor, the default, and the answer stays", re.search(r"^> \d+\.\s+Quit", out, re.M) is not None, out[-600:])
-            self.check("control: the terminal is given back after the menu", re.search(r"(?<![-\w])icanon\b", out) is not None and re.search(r"(?<![-\w])echo\b", out) is not None, out[-600:])
+            self.check("control: q leaves the alternate screen and shows the cursor again", b"\x1b[?1049l" in s.buf and b"\x1b[?25h" in s.buf, repr(s.buf[-400:]))
+            self.check("control: the terminal is given back after the full screen", re.search(r"(?<![-\w])icanon\b", out) is not None and re.search(r"(?<![-\w])echo\b", out) is not None, out[-600:])
         except Fail as e:
-            self.check("control's menu by the arrow keys", False, str(e))
+            self.check("control's full screen", False, str(e))
             raise
         finally:
             s.close()

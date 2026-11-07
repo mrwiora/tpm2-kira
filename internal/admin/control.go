@@ -102,6 +102,40 @@ type controller struct {
 	// screen is what the overview shows: "chain" (step 1), "hub" (step 2)
 	// or one of step 2's submenus (controlMenus).
 	screen string
+	// in is the terminal the full screen reads (default stdin); fast and slow
+	// collect the facts (default fastFacts, slowFacts): the tests' own.
+	in   *os.File
+	fast func(tpmPath string, debug bool) machineFacts
+	slow func(*machineFacts)
+}
+
+// look is the facts, collected whole.
+func (c *controller) look() machineFacts {
+	f := c.fastFacts()
+	c.slowFacts(&f)
+	return f
+}
+
+func (c *controller) fastFacts() machineFacts {
+	if c.fast != nil {
+		return c.fast(c.o.TPMPath, c.o.Debug)
+	}
+	return fastFacts(c.o.TPMPath, c.o.Debug)
+}
+
+func (c *controller) slowFacts(f *machineFacts) {
+	if c.slow != nil {
+		c.slow(f)
+		return
+	}
+	slowFacts(f)
+}
+
+func (c *controller) input() *os.File {
+	if c.in != nil {
+		return c.in
+	}
+	return os.Stdin
 }
 
 // ControlNeedsRoot is control's answer when it is not root: its screen,
@@ -149,11 +183,14 @@ func Control(o ControlOptions) error {
 	// twice. Run by hand, seal and reseal keep them.
 	defer func(old bool) { measure.AdvisoryWarnings = old }(measure.AdvisoryWarnings)
 	measure.AdvisoryWarnings = false
+	if c.fullScreen() {
+		return c.screenLoop()
+	}
 	for {
 		if c.tty { // the overview is a page of its own: what the last step printed was read before "Continue"
 			fmt.Fprint(c.out, clearScreen+"\n\033[2mLooking at this machine ...\033[0m\n")
 		}
-		c.facts = collectFacts(o.TPMPath, o.Debug)
+		c.facts = c.look()
 		if c.screen == "" { // the start: step 1 until the boot chain is in place
 			c.screen = "hub"
 			if !chainDone(&c.facts) {
@@ -455,7 +492,7 @@ func (c *controller) show() {
 // when it is out of date - after everything is set up, as a build takes
 // its time - then what is left to do by hand is said: the route.
 func (c *controller) leave() {
-	c.leaveWith(func() machineFacts { return collectFacts(c.o.TPMPath, c.o.Debug) })
+	c.leaveWith(c.look)
 }
 
 // leaveWith is leave with look, the fresh look at the machine. The image comes
