@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tpm2-trust/tpm2-kira/internal/measure"
@@ -224,7 +225,7 @@ func showFirstCode(tpmDev transport.TPM, nvramIndex uint32, debug bool) {
 	if why == "" {
 		why = "this boot is not the state the slot is sealed to"
 	}
-	fmt.Printf("No code in this boot (%s).\n", why)
+	fmt.Printf("No code in this boot: %s.\n", strings.ToLower(why[:1])+why[1:])
 	fmt.Println("The first code is on the next boot's code screen: compare it with your authenticator there.")
 }
 

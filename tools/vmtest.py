@@ -1015,7 +1015,7 @@ class Machine:
         self.check("slot 0 seals the machine-id in the EFI variable KIRAmachineID", "sealed" in mid and "Sealed the machine-id" in out, out[-400:])
         # slot add shows each new slot's first code while the TPM computes one, in a boot not
         # closed yet: the code an authenticator of its secret shows; otherwise why there is none.
-        firsts = re.findall(r"^(?:The slot's code now: (\d{6})|No code in this boot \((.*)\)\.)", out, re.M)
+        firsts = re.findall(r"^(?:The slot's code now: (\d{6})|No code in this boot: (.*)\.)", out, re.M)
         last = self.slots[-1]
         if len(firsts) == len(self.slots) and firsts[-1][0]:
             self.check(f"slot add: slot {last}'s first code is the authenticator's (computed from its secret)", code_matches(self.secrets[last], firsts[-1][0], added_at), out[-600:])
