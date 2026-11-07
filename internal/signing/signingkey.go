@@ -80,23 +80,9 @@ func ParseSigningPublicKeyPEM(pemData []byte, pemPath string) (crypto.PublicKey,
 	}
 }
 
-// LoadSigningPrivateKey reads a signing private key file. The file is either
-// a PEM private key (RSA or ECDSA; PKCS#1, PKCS#8 or SEC1) or a YubiKey stub
-// (see YubiKeyStub), told apart by content.
-//
-// A stub yields a signer that does not touch the token until it signs, so
-// its Public() is available with the token unplugged.
-//
-// It does not check the file; seal and reseal use LoadCheckedSigningPrivateKey.
-func LoadSigningPrivateKey(pemPath string) (crypto.Signer, error) {
-	pemData, err := os.ReadFile(pemPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read private key file %s: %w", pemPath, err)
-	}
-	return ParseSigningPrivateKey(pemData, pemPath)
-}
-
-// LoadCheckedSigningPrivateKey reads a private key file through
+// LoadCheckedSigningPrivateKey reads a signing private key file - a PEM private key (RSA or
+// ECDSA; PKCS#1, PKCS#8 or SEC1) or a YubiKey stub (YubiKeyStub), told apart by content; a stub
+// yields a signer that does not touch the token until it signs - through
 // ReadSigningKeyFile, so ownership, mode and symlinks are checked on the
 // file that is parsed.
 func LoadCheckedSigningPrivateKey(pemPath string) (crypto.Signer, error) {

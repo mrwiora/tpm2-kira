@@ -574,17 +574,6 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 	return nil
 }
 
-// drop takes a part out after the decision, with the reason, and what
-// needed it with it.
-func (p *BootPlan) drop(name, why string) {
-	for i := range p.Parts {
-		if p.Parts[i].Name == name {
-			p.Parts[i] = PlanPart{Name: name, Why: why}
-		}
-	}
-	p.TPM = p.needsTPM()
-}
-
 // InitramfsPlanCommand implements 'initramfs plan': with a build root the
 // image's files and the hook's lines, without one the plan alone.
 func InitramfsPlanCommand(o PlanOptions, buildroot, format string, out io.Writer) error {

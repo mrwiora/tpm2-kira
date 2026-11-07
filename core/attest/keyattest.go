@@ -239,15 +239,6 @@ func rootNames(vs []*trustVendor) string {
 	return strings.Join(n, ", ")
 }
 
-// PhoneRootNames lists the attestation roots the machine accepts.
-func PhoneRootNames() []string {
-	var n []string
-	for _, v := range loadPhoneRoots() {
-		n = append(n, v.Name)
-	}
-	return n
-}
-
 // ---- KeyDescription (https://source.android.com/docs/security/features/keystore/attestation) ----
 
 const (

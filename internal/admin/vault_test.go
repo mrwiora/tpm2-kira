@@ -235,10 +235,10 @@ func TestVaultClientPin(t *testing.T) {
 // A volume with a unattended vault recipe (0x2400) keyslot takes the vault's key, which needs
 // nobody; without one, cryptsetup's own prompt follows.
 func TestDiskKeyFromTheVault(t *testing.T) {
-	if got := diskkey.RecipeOfTokens([]diskkey.LuksToken{{Recipe: diskkey.RecipeRecovery}, {Recipe: diskkey.RecipeUnattendedVault}, {Recipe: diskkey.RecipePhoneSalt}}); got != diskkey.RecipeUnattendedVault {
+	if got := diskkey.RecipesOfTokens([]diskkey.LuksToken{{Recipe: diskkey.RecipeRecovery}, {Recipe: diskkey.RecipeUnattendedVault}, {Recipe: diskkey.RecipePhoneSalt}}); len(got) == 0 || got[0] != diskkey.RecipeUnattendedVault {
 		t.Fatalf("recipe %q", got)
 	}
-	if got := diskkey.RecipeOfTokens([]diskkey.LuksToken{{Recipe: diskkey.RecipeRecovery}, {Recipe: diskkey.RecipePhoneSalt}}); got != diskkey.RecipePhoneSalt {
+	if got := diskkey.RecipesOfTokens([]diskkey.LuksToken{{Recipe: diskkey.RecipeRecovery}, {Recipe: diskkey.RecipePhoneSalt}}); len(got) == 0 || got[0] != diskkey.RecipePhoneSalt {
 		t.Fatalf("recipe %q", got)
 	}
 	noAsk := func(volume, what, note string) ([]byte, error) {

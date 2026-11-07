@@ -46,8 +46,12 @@ func TestPhoneRootsManifest(t *testing.T) {
 	if len(phoneRootErrs) > 0 {
 		t.Fatal(phoneRootErrs)
 	}
-	if !slices.Equal(PhoneRootNames(), []string{"Google"}) || len(roots[0].roots) != 2 {
-		t.Fatalf("phone roots: %v", PhoneRootNames())
+	var names []string
+	for _, v := range roots {
+		names = append(names, v.Name)
+	}
+	if !slices.Equal(names, []string{"Google"}) || len(roots[0].roots) != 2 {
+		t.Fatalf("phone roots: %v", names)
 	}
 	files, _ := fs.Glob(phoneRootFS, "phoneroots/*/*.der")
 	if len(files) != 2 {

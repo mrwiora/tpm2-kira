@@ -142,7 +142,8 @@ TPM2_KIRA_ATTEST_ADAPTER="hci1"
 	if _, err := parseAttest([]byte("TPM2_KIRA_SOMETHING=1\n")); err == nil {
 		t.Fatal("unknown key accepted")
 	}
-	def, err := LoadAttestConfig(filepath.Join(t.TempDir(), "missing"))
+	conf, err := LoadControlConfig(filepath.Join(t.TempDir(), "missing"))
+	def := conf.Attest
 	if err != nil || def.Adapter != 0 || def.Bluetooth != "auto" {
 		t.Fatalf("missing file should mean the defaults: %+v %v", def, err)
 	}

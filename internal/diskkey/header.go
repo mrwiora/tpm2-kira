@@ -212,14 +212,6 @@ func RecipesOfTokens(toks []LuksToken) []Recipe {
 	return out
 }
 
-// RecipeOfTokens is the recipe tried first, or 0.
-func RecipeOfTokens(toks []LuksToken) Recipe {
-	if rs := RecipesOfTokens(toks); len(rs) > 0 {
-		return rs[0]
-	}
-	return 0
-}
-
 // routedUUIDs are the volumes the kernel command line routes to the
 // unlock socket (rd.luks.key=<UUID>=<socket>), for the code screen's
 // words before any volume has asked.

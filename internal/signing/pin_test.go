@@ -542,7 +542,7 @@ func TestSessionWipesThePIN(t *testing.T) {
 	if err := WriteSigningKeyFile(path, stub); err != nil {
 		t.Fatal(err)
 	}
-	signer, err := LoadSigningPrivateKey(path)
+	signer, err := loadSigner(path)
 	if err != nil {
 		t.Fatal(err)
 	}

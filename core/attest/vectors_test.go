@@ -54,7 +54,6 @@ func TestGoldenVectors(t *testing.T) {
 		{"enrol_accept_tbs", EnrolAcceptTBS(receipt.DeviceID, cb, receipt.AKName, anchor, "pixel-1", "default"), "74706d322d6b6972612f656e726f6c2d6163636570742f763110000000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf20000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f22000000000bb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecf5b0000005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a07000000706978656c2d310700000064656661756c74"},
 		{"anchor_digest", AnchorDigest(anchor), "da0912c41cf5e85586e925cb47e7d00377338fc4cce96832f21b36808946fc27"},
 		{"service_data", BuildServiceData(AdvFlagAttest, []byte{1, 2, 3, 4}, seq(0xE0, 32)), "020102030424213b87412e6e4e"},
-		{"factor", FactorFromSecret(seq(0xF0, 16), "luks"), "be5af6edaaa51a5d8243045ef04287fdba640410a8364f256fa39381b0491cf8"},
 	}
 	for _, c := range cases {
 		if !bytes.Equal(c.got, h(c.want)) {

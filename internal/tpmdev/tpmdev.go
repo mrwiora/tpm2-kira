@@ -279,24 +279,6 @@ func FlushHandle(tpmDev transport.TPM, handle tpm2.TPMHandle) {
 	_, _ = flushCmd.Execute(tpmDev)
 }
 
-// HandleNVRAMNotFoundError converts NVRAM errors to user-friendly messages
-func HandleNVRAMNotFoundError(err error, debug bool) error {
-	if err == nil {
-		return nil
-	}
-
-	errStr := err.Error()
-	if strings.Contains(errStr, "TPM_RC_HANDLE") ||
-		strings.Contains(errStr, "does not exist") ||
-		strings.Contains(errStr, "TPM_RC_NV_UNINITIALIZED") {
-		if debug {
-			return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up (debug: %w)", err)
-		}
-		return fmt.Errorf("tpm2-kira has not been configured yet. Run 'tpm2-kira slot add' to set it up")
-	}
-	return err
-}
-
 // ReadFromNVRAM reads data from a TPM NVRAM index
 func ReadFromNVRAM(tpmDev transport.TPM, index uint32) ([]byte, error) {
 	nvIndex := tpm2.TPMHandle(index)

@@ -140,7 +140,7 @@ func TestStubRoundTrip(t *testing.T) {
 
 	card.Log = nil
 	card.Unplugged = true // loading and Public() must not need the token
-	signer, err := signing.LoadSigningPrivateKey(path)
+	signer, err := loadSigner(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +172,13 @@ func TestStubRefusals(t *testing.T) {
 		content = strings.Replace(content, "%s", der, 1)
 		path := filepath.Join(t.TempDir(), "seal.key")
 		os.WriteFile(path, []byte(content), 0400)
-		if _, err := signing.LoadSigningPrivateKey(path); err == nil {
+		if _, err := loadSigner(path); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	path := filepath.Join(t.TempDir(), "seal.key")
 	os.WriteFile(path, []byte(strings.Replace(good, "%s", der, 1)), 0400)
-	if _, err := signing.LoadSigningPrivateKey(path); err != nil {
+	if _, err := loadSigner(path); err != nil {
 		t.Errorf("valid stub refused: %v", err)
 	}
 }
@@ -192,11 +192,11 @@ func TestSignForTPMThroughToken(t *testing.T) {
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
 	storeTestPIN(t, "123456")
 
-	ecSigner, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	ecSigner, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsaSigner, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotSignature)))
+	rsaSigner, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotSignature)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestBlobSignatureThroughToken(t *testing.T) {
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
 	storeTestPIN(t, "123456")
 
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestWrongPINStopsEverything(t *testing.T) {
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
 	storeTestPIN(t, "000000")
 
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestLastPINAttemptIsNotSpent(t *testing.T) {
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
 	storeTestPIN(t, "123456")
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestNoPINIsUnavailable(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestWrongTokenAndReplacedKey(t *testing.T) {
 	fake.install(t)
 	storeTestPIN(t, "123456")
 	path := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
-	signer, _ := signing.LoadSigningPrivateKey(path)
+	signer, _ := loadSigner(path)
 	digest := sha256.Sum256(nil)
 
 	// A different YubiKey is plugged in.
@@ -380,7 +380,7 @@ func TestSessionIsSharedAndReset(t *testing.T) {
 
 	digest := sha256.Sum256(nil)
 	for i := 0; i < 3; i++ { // separate loads, like seal loading the key twice
-		signer, _ := signing.LoadSigningPrivateKey(path)
+		signer, _ := loadSigner(path)
 		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
 			t.Fatal(err)
 		}
@@ -598,7 +598,7 @@ func TestVerifyKeyPairMatchThroughToken(t *testing.T) {
 	card := pivtest.New(1)
 	key := card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	signer, _ := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, _ := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	card.Log = nil
 	if err := signing.VerifyKeyPairMatch(&key.PublicKey, signer); err != nil {
 		t.Errorf("matching pair refused: %v", err)
@@ -620,7 +620,7 @@ func TestPINFromTheFile(t *testing.T) {
 	conf := filepath.Join(t.TempDir(), "control.conf")
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
 	pinFile := signing.PINPath()
-	signer, _ := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, _ := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	digest := sha256.Sum256(nil)
 
 	capture := func(fn func()) string {
@@ -719,7 +719,7 @@ func TestPINPolicyAlwaysLikeRealYubiKey(t *testing.T) {
 			data = bytes.Replace(data, []byte(`"pinPolicy": "always"`), []byte(`"pinPolicy": "`+recorded+`"`), 1)
 			os.Chmod(path, 0600)
 			os.WriteFile(path, data, 0400)
-			signer, err := signing.LoadSigningPrivateKey(path)
+			signer, err := loadSigner(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -746,7 +746,7 @@ func TestPINAlwaysWithPINLeftVerified(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
 	storeTestPIN(t, "123456")
-	signer, _ := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, _ := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 
 	other, err := piv.Open(card)
 	if err != nil {
@@ -775,7 +775,7 @@ func TestControlStoresThePIN(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", filepath.Join(t.TempDir(), "control.conf"))
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +832,7 @@ func TestPINThroughADescriptor(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}, typed: "888888"}
 	fake.install(t)
 	storeTestPIN(t, "999999")
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,7 +858,7 @@ func TestWrongPINThroughADescriptor(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}, typed: "123456"}
 	fake.install(t)
 	storeTestPIN(t, "123456")
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +884,7 @@ func TestShortPINThroughADescriptorSpendsNoAttempt(t *testing.T) {
 	card := pivtest.New(1)
 	card.AddECKey(piv.SlotAuthentication, piv.PINPolicyOnce, piv.TouchPolicyNever, false)
 	(&fakeTokens{cards: []*pivtest.Card{card}}).install(t)
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -905,7 +905,7 @@ func TestThePINVariableIsIgnored(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
 	t.Setenv("TPM2_KIRA_PIN", "000000")
-	signer, err := signing.LoadSigningPrivateKey(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
+	signer, err := loadSigner(writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication)))
 	if err != nil {
 		t.Fatal(err)
 	}

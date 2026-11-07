@@ -332,14 +332,3 @@ func MatchServiceData(sd, advKey []byte) bool {
 	}
 	return hmac.Equal(sd[5:], AdvertisingTag(advKey, sd[1:5]))
 }
-
-// FactorFromSecret derives the factor line of PLAN-PHONESALT.md §3 from F:
-// HKDF-SHA256(ikm = F, salt = "", info = "tpm2-kira/factor/v1" ‖ lp(label), 32).
-// Defined here so the derivation string is fixed in one place; the release
-// path itself is not implemented yet.
-func FactorFromSecret(f []byte, label string) []byte {
-	// HKDF-Extract with an empty salt uses a zero key of hash length.
-	prk := hmacSHA256(make([]byte, sha256.Size), f)
-	info := append([]byte(labelFactor), lp([]byte(label))...)
-	return hmacSHA256(prk, info, []byte{0x01})
-}

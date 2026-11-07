@@ -262,13 +262,6 @@ func FormatBootCode(code string) string {
 	return code[:4] + "-" + code[4:]
 }
 
-// PolicyAuthorizeDigest is the policy digest of a key that is usable
-// exactly when keyName has approved a policy for policyRef. The slot's
-// policy begins with it (SlotPolicyDigest).
-func PolicyAuthorizeDigest(keyName, policyRef []byte) []byte {
-	return PolicyDigest(policyAuthorize(keyName, policyRef))
-}
-
 func policyAuthorize(keyName, policyRef []byte) PolicyStep {
 	return tpm2.PolicyAuthorize{
 		KeySign:   tpm2.TPM2BName{Buffer: keyName},

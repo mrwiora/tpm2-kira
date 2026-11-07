@@ -108,12 +108,6 @@ func sshAuthorizedKeysPath(path string) string {
 	return filepath.Join(filepath.Dir(path), "authorized_keys")
 }
 
-// LoadAttestConfig is the radio part of the file at path.
-func LoadAttestConfig(path string) (AttestConfig, error) {
-	cfg, err := LoadControlConfig(path)
-	return cfg.Attest, err
-}
-
 // ParseControlConfig parses control.conf content: the first line it
 // refuses is the error (ControlConfigProblems lists them all).
 func ParseControlConfig(data []byte) (ControlConfig, error) {
