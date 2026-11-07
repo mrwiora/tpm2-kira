@@ -37,7 +37,7 @@ func TestStatusSaysSecureBoot(t *testing.T) {
 	}
 }
 
-// Step 1's prerequisites: every bad state in red, and none of them stops anything.
+// The boot chain's prerequisites: every bad state in red, and none of them stops anything.
 func TestPrereqsShowSecureBootRed(t *testing.T) {
 	for _, state := range []sbstate.State{{Known: true}, {Known: true, SetupMode: true}, {Why: "no efivars"}} {
 		c := &controller{out: &strings.Builder{}}

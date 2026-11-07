@@ -739,26 +739,26 @@ class Machine:
         s = self.session("sudo tpm2-kira control", "control")
         menu = r"Enter a number between 1 and \d+: ?$"
         try:
-            # Step 1: every open adoption, written when asked; then on.
+            # The boot chain: every open adoption, written when asked; then on.
             first = True
             for _ in range(10):
                 text, _ = s.expect(menu, 120)
                 if first:
                     first = False
                     self.check_control_proof(text)
-                    self.check_control_secure_boot("control step 1", text, {"Setup Mode": "Setup Mode (risk: nothing checks the boot chain", "off": "disabled (risk: nothing checks", "could": "state unknown,"}, s)
+                    self.check_control_secure_boot("control's boot chain", text, {"Setup Mode": "Setup Mode (risk: nothing checks the boot chain", "off": "disabled (risk: nothing checks", "could": "state unknown,"}, s)
                 opts = menu_options(text)
                 pick = next((o for o in opts if o[1].startswith("•") and "adoption" in o[1]), None)
                 if pick:
                     s.send(pick[0] + "\n")
                     s.expect(r"\[(y/N|Y/n)\] ?$"); s.send("y\n")
                     continue
-                nxt = next((o for o in opts if "Continue to step 2" in o[1]), None)
+                nxt = next((o for o in opts if "Continue to the overview" in o[1]), None)
                 if not nxt or not nxt[1].startswith("•"):
-                    raise Fail("step 1 does not offer step 2:\n" + text[-1200:])
+                    raise Fail("the boot chain does not offer the overview:\n" + text[-1200:])
                 s.send(nxt[0] + "\n")
                 break
-            self.check("control step 1: the boot chain adopted (hook, route)", True)
+            self.check("control: the boot chain adopted (hook, route)", True)
 
             def pick(rx, timeout=120):
                 text, _ = s.expect(menu, timeout)
@@ -768,7 +768,7 @@ class Machine:
                 s.send(o[0] + "\n")
                 return text
 
-            pick(r"Network and SSH at boot")
+            pick(r"Network & SSH")
             pick(r"Network in the boot image")
             text = pick(r"^DHCP$")
             mac = re.findall(r"DHCP on ([0-9a-f:]{17})", text)
@@ -799,9 +799,11 @@ class Machine:
             rc, out = self.run(f"umask 077; printf '%s\\n' {shlex.quote(pub)} > /etc/tpm2-kira/authorized_keys")
             self.check("control: the SSH server at boot with an SSH CA in the TPM", rc == 0, out)
 
-            pick(r"Back to step 2")
+            pick(r"Back to the overview")
+            pick(r"Boot image")
             pick(r"Debug at boot")
             s.expect(r"Switch debug at boot on\? \[y/N\] ?$"); s.send("y\n")
+            pick(r"Back to the overview")
             pick(r"^\s*Quit$")
             s.expect(r"Run (mkinitcpio -P|update-initramfs -u) now\? \[Y/n\] ?$", 120); s.send("y\n")
             out = s.wait_end(900)
@@ -1795,22 +1797,22 @@ WantedBy=sysinit.target
                 if o:
                     s.send(o[0] + "\n")
                     return text
-                nxt = next((o for o in opts if "Continue to step 2" in o[1]), None)
+                nxt = next((o for o in opts if "Continue to the overview" in o[1]), None)
                 if not nxt:
                     raise Fail(f"no option /{rx}/ in:\n" + text[-1200:])
                 s.send(nxt[0] + "\n")
             raise Fail(f"no option /{rx}/")
 
         try:
-            text = pick(r"Signing key and TOTP codes")
-            self.check("control: step 2 shows the moved channel", "phone channel" in text, text[-1200:])
-            self.check("control: step 2 judges the machine's memory", re.search(r"Memory\s+\d+ MiB", re.sub(r"\x1b\[[0-9;]*m", "", text)) is not None, text[-1200:])
-            self.check_control_secure_boot("control step 2", text, {"Setup Mode": "Setup Mode (risk: any root user", "off": "disabled (risk: the boot loader", "could": "state unknown,"}, s)
+            text = pick(r"Keys & slots")
+            self.check("control: the overview shows the moved channel", "phone channel" in text, text[-1200:])
+            self.check("control: the overview judges the machine's memory", re.search(r"Memory\s+\d+ MiB", re.sub(r"\x1b\[[0-9;]*m", "", text)) is not None, text[-1200:])
+            self.check_control_secure_boot("control's overview", text, {"Setup Mode": "Setup Mode (risk: any root user", "off": "disabled (risk: the boot loader", "could": "state unknown,"}, s)
             text = pick(r"Slot \d+'s phone channel")
             text, _ = s.expect(r"Seal slot \d+'s phone channel to the next boot's PCR 7\?.*\[y/N\] ?$", 60)
             self.check("control: old, new and what moved it, before the question", re.search(r"PCR 7 sealed: +[0-9a-f]{64}", text) is not None and re.search(r"SecureBoot: (on|off)", text) is not None, text[-1200:])
             s.send("y\n")
-            pick(r"Back to step 2")
+            pick(r"Back to the overview")
             pick(r"^\s*Quit$")
             for _ in range(4):
                 text, m = s.expect(r"(\[(y/N|Y/n)\] ?$|Connection to \S+ closed)", 120)
@@ -1842,20 +1844,20 @@ WantedBy=sysinit.target
                 if o:
                     s.send(o[0] + "\n")
                     return text
-                nxt = next((o for o in opts if "Continue to step 2" in o[1]), None)
+                nxt = next((o for o in opts if "Continue to the overview" in o[1]), None)
                 if not nxt:
                     raise Fail(f"no option /{rx}/ in:\n" + text[-1200:])
                 s.send(nxt[0] + "\n")
             raise Fail(f"no option /{rx}/")
 
         try:
-            pick(r"Network and SSH at boot")
+            pick(r"Network & SSH")
             pick(r"SSH server at boot")
             s.expect(r"Start the SSH server with the code screen\? \[(y/N|Y/n)\] ?$"); s.send("n\n")
             # A destroying question takes its word alone: n, as Enter, keeps the CA.
             s.expect(r"Remove the SSH CA too\? Type delete to destroy it: ?$", 60); s.send("n\n")
             self.check("control asks for the word before it removes the SSH CA when SSH is switched off; n keeps it", True)
-            pick(r"Back to step 2")
+            pick(r"Back to the overview")
             pick(r"^\s*Quit$")
             # SSH switched off makes the image out of date: the next boot
             # must not start the server.

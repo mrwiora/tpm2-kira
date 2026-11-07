@@ -174,11 +174,11 @@ check itself says that this first state is clean; a boot chain that was
 tampered with before the enrolment would be pinned as good. Only a check
 made before the phone existed can say it, so the order is fixed:
 
-1. The slot is sealed with a TOTP key (`control`, "Signing key and TOTP codes", or `slot add`).
+1. The slot is sealed with a TOTP key (`control`, "Keys & slots", or `slot add`).
 2. The machine boots through tpm2-kira's code screen. The code exists only
    while the PCRs are the ones the signing key approved, and the person
    compares it with the authenticator: this boot is verified.
-3. In that boot the phone is enrolled (`control`, "Attestation by phone", or `phone enrol`), and with
+3. In that boot the phone is enrolled (`control`, "Phone", or `phone enrol`), and with
    that the slot's TOTP key is retired.
 
 `phone enrol` enforces what the machine can know of this (`requireVerifiedBoot`

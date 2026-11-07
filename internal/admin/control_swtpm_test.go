@@ -15,7 +15,7 @@ import (
 
 // control's facts on a software TPM: what it reads from the TPM and the
 // slots, the EK verdict a phone would reach, the risks, the options of
-// step 2, and control.conf written (here a file of the test's, through
+// the overview, and control.conf written (here a file of the test's, through
 // TPM2_KIRA_CONTROL_CONF). The host's own files (keys, Secure Boot, the
 // initramfs) are facts too, but of the machine the suite runs on, so
 // they are not asserted.
@@ -146,4 +146,11 @@ func TestControlFactsOnSWTPM(t *testing.T) {
 	if s := c.menuSteps("phone")[0]; s.Key != "attest" || !strings.HasPrefix(s.Blocked, conf+": ") {
 		t.Errorf("the attest step with a broken file: %+v", s)
 	}
+}
+
+// collectFacts is the facts, fast and slow at once, as the line menus collect them.
+func collectFacts(tpmPath string, debug bool) machineFacts {
+	f := fastFacts(tpmPath, debug)
+	slowFacts(&f)
+	return f
 }

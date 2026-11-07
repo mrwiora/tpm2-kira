@@ -19,7 +19,7 @@ import (
 )
 
 // control's options for the boot image's network and SSH server
-// (remote_config.go, docs/SSH.md), under "Network and SSH at boot": the
+// (remote_config.go, docs/SSH.md), under "Network & SSH": the
 // settings are asked one by one, proposed from what is set or, the first
 // time, from the running system's network configuration (systemd-networkd
 // or ifupdown), and written into control.conf; the image takes them at
@@ -329,7 +329,7 @@ func (c *controller) ensureSSHCA(conf *config.Config) error {
 		return nil
 	}
 	if c.facts.Keys == "" {
-		fmt.Fprintln(c.out, warn("No signing key (step 1, Set up): it approves the PCR states the SSH CA signs in."))
+		fmt.Fprintln(c.out, warn("No signing key (Keys & slots): it approves the PCR states the SSH CA signs in."))
 		return nil
 	}
 	typ, err := prompt.Select(c.ask(), "Create the SSH CA in the TPM",

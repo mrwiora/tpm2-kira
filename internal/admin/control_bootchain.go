@@ -7,11 +7,11 @@ import (
 	"strings"
 )
 
-// Step 1 of control, the boot chain: what tpm2-kira needs of the machine
+// The boot chain of control: what tpm2-kira needs of the machine
 // to be in its boot at all - the prerequisites, each judged on one line -
 // and the two edits that put it there, each asked for: the sd-tpm2-kira
 // hook in the HOOKS of mkinitcpio.conf, and the key's route on the kernel
-// command line (crypttab on Debian). Step 2 opens when the chain is in
+// command line (crypttab on Debian). The other sections open when the chain is in
 // place; the image is built once, when control is left.
 
 // prereq is one line of the prerequisites: met, not met (red, with what
@@ -264,13 +264,13 @@ func routeResolved(f *machineFacts) bool {
 	return true
 }
 
-// chainSteps are step 1: the hook, the route, and the way on to step 2
+// chainSteps are the boot chain: the hook, the route, and the way on to the overview
 // once they are in place.
 func (c *controller) chainSteps() []controlStep {
 	boot := c.bootStep()
 	route := c.routeStep()
 	pcr, hasPCR := c.pcrKeyStep()
-	next := controlStep{Key: "continue", Title: "Continue to step 2", Menu: "hub",
+	next := controlStep{Key: "continue", Title: "Continue to the overview", Menu: "hub",
 		Explain: "The signing key and the TOTP codes, the phone, the ways the disk is unlocked, the network and SSH at boot - combined as this machine allows."}
 	var open []string
 	for _, s := range []controlStep{boot, route} {
@@ -323,7 +323,7 @@ func (c *controller) runPCRKey() error {
 	return nil
 }
 
-// chainDone says whether step 1 is in place: the hook in the HOOKS the
+// chainDone says whether the boot chain is in place: the hook in the HOOKS the
 // image is built with, and the key routed where there is a LUKS device to
 // route.
 func chainDone(f *machineFacts) bool {

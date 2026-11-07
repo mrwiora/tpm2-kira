@@ -129,7 +129,7 @@ func TestControlSections(t *testing.T) {
 	}
 	for _, s := range c.sectionSteps("chain") {
 		if s.Menu == "hub" {
-			t.Error("the boot chain's section has the way on to step 2")
+			t.Error("the boot chain's section has the way on to the overview")
 		}
 	}
 }

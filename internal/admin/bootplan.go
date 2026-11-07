@@ -320,7 +320,7 @@ func decidePlan(in planInputs) *BootPlan {
 	net := cfg.Remote.Net
 	switch {
 	case net.Mode == "off":
-		add(imageplan.PartNet, false, "off (Network and SSH at boot)")
+		add(imageplan.PartNet, false, "off (Network & SSH)")
 	case net.problem() != "":
 		add(imageplan.PartNet, false, net.problem())
 	case in.NoBusybox:
@@ -366,7 +366,7 @@ func decidePlan(in planInputs) *BootPlan {
 	ssh := cfg.Remote.SSH
 	switch {
 	case !ssh.On:
-		add(imageplan.PartSSH, false, "off (Network and SSH at boot)")
+		add(imageplan.PartSSH, false, "off (Network & SSH)")
 	case !p.Has(imageplan.PartNet):
 		add(imageplan.PartSSH, false, "it needs the image's network")
 	case in.TPMErr != "":

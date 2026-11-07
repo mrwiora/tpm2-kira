@@ -11,68 +11,41 @@ import (
 	"github.com/tpm2-trust/tpm2-kira/internal/signing"
 )
 
-// Step 2 of control: what the machine combines, in submenus. Each option
-// is open, done, or greyed with the reason this machine cannot have it
-// (no TPM, no Bluetooth adapter, no wired interface, a missing option it
-// builds on); the hub's line of a submenu sums its options up. Nothing of
-// step 2 is open before the boot chain of step 1 is in place.
+// The overview of control: what the machine combines, a line per section. Each
+// option is open, done, or greyed with the reason this machine cannot have it (no
+// TPM, no Bluetooth adapter, no wired interface, a missing option it builds on); a
+// section's line sums its options up. Nothing but the boot chain is open before the
+// boot chain is in place.
 
-// controlMenu is a submenu of step 2.
-type controlMenu struct {
-	key, title, intro string
-	required          bool // a protection: the recommendation while open
-}
-
-var controlMenus = []controlMenu{
-	{key: "keys", title: "Signing key and TOTP codes", required: true,
-		intro: "The signing key approves boot states and authorises every write to the TPM; with it the TOTP codes at boot are sealed into slot 0 (the boot as it is) and slot 1 (the fallback for a boot whose kernel changed unpredicted). Everything else of step 2 builds on them."},
-	{key: "phone", title: "Attestation by phone",
-		intro: "A phone (Marify, Bluetooth LE) checks the boot state against what it pinned and shows a code the machine shows too; it replaces Enter at the code screen, and it can hand back the salt of a disk key."},
-	{key: "disk", title: "Disk unlock",
-		intro: "How the disk's key is made at boot, beside the recovery passphrase: each way is a keyslot of its own, and they combine - at boot the one that answers first opens the disk, and cryptsetup's own prompt stays the fallback."},
-	{key: "remote", title: "Network and SSH at boot",
-		intro: "The boot image's own network - for the vault, and for tpm2-kira's SSH server, where the codes are confirmed and passwords typed remotely. Set for the image alone; the running system's network stays as it is."},
-	{key: "tools", title: "Tools: what the commands say",
-		intro: "Views: the commands that read the machine, run as they are. Nothing here changes anything."},
-	{key: "reference", title: "Reference: the help pages",
-		intro: "The help page of every command, the expert ones included: luks mark and derive, phone salt rotate, phone quote and verify are done by hand, as the pages say."},
-}
-
-func menuByKey(key string) controlMenu {
-	for _, m := range controlMenus {
-		if m.key == key {
-			return m
-		}
-	}
-	return controlMenu{key: key, title: key}
-}
-
-// hubSteps are step 2: the image hints, step 1's line, a line per
-// submenu, and the boot debug switch.
+// hubSteps are the overview: the image's hints, the boot chain's line, and a line
+// per section.
 func (c *controller) hubSteps() []controlStep {
 	f := &c.facts
 	done := chainDone(f)
 	steps := c.imageHints()
-	chain := controlStep{Key: "chain", Title: "Step 1: the boot chain", Menu: "chain",
+	chain := controlStep{Key: "chain", Title: "Boot chain", Menu: "chain",
 		Explain: "The prerequisites, the sd-tpm2-kira hook in the boot image and the key's route on the kernel command line."}
 	if done {
 		chain.Done, chain.Optional = "in place", true
 	}
 	steps = append(steps, chain)
-	for _, m := range controlMenus {
-		st := summarize(m, c.menuSteps(m.key))
+	for _, sec := range controlSections {
+		if sec.key == "overview" || sec.key == "chain" {
+			continue
+		}
+		st := summarize(sec, c.menuSteps(sec.key))
 		if !done && st.Dirty == "" {
-			st.Done, st.Blocked = "", "needs step 1, the boot chain"
+			st.Done, st.Blocked = "", "needs the boot chain"
 		}
 		steps = append(steps, st)
 	}
-	return append(steps, c.debugStep())
+	return steps
 }
 
-// summarize is a submenu's line on step 2: red when an option is, open
-// while a protection in it is, else what is done in it, else greyed with
-// the reason when nothing in it is possible.
-func summarize(m controlMenu, options []controlStep) controlStep {
+// summarize is a section's line on the overview: red when an option is, open
+// while a protection in it is, else what is done in it, else greyed with the
+// reason when nothing in it is possible.
+func summarize(m controlSection, options []controlStep) controlStep {
 	st := controlStep{Key: "menu:" + m.key, Title: m.title, Explain: m.intro, Menu: m.key, Optional: !m.required}
 	var done, blocked []string
 	open, possible := false, false
@@ -101,7 +74,7 @@ func summarize(m controlMenu, options []controlStep) controlStep {
 	return st
 }
 
-// menuSteps are a submenu's options.
+// menuSteps are a section's options.
 func (c *controller) menuSteps(key string) []controlStep {
 	switch key {
 	case "keys":
@@ -112,6 +85,8 @@ func (c *controller) menuSteps(key string) []controlStep {
 		return c.diskSteps()
 	case "remote":
 		return []controlStep{c.netStep(), c.sshStep()}
+	case "image":
+		return []controlStep{c.buildStep(), c.debugStep()}
 	case "tools":
 		return c.toolSteps()
 	case "reference":
@@ -266,7 +241,7 @@ func (c *controller) phoneSteps() []controlStep {
 	case f.TPMErr != "":
 		attest.Blocked = "no TPM: " + f.TPMErr
 	case strong == nil:
-		attest.Blocked = "needs slot 0 (Signing key and TOTP codes)"
+		attest.Blocked = "needs slot 0 (Keys & slots)"
 	case f.AttestConf != "":
 		attest.Blocked = controlConfigPath() + ": " + f.AttestConf
 	case strong.Phones > 0:
@@ -296,7 +271,7 @@ func (c *controller) phoneSteps() []controlStep {
 	case f.TPMErr != "":
 		bt.Blocked = "no TPM: a phone cannot attest this machine"
 	case f.Keys == "":
-		bt.Blocked = "needs the signing key (Signing key and TOTP codes)"
+		bt.Blocked = "needs the signing key (Keys & slots)"
 	case f.AttestConf != "":
 		bt.Blocked = controlConfigPath() + ": " + f.AttestConf
 	}
@@ -319,7 +294,7 @@ func (c *controller) diskGate() string {
 	case len(f.NoRecovery) >= devices:
 		return "needs a recovery passphrase, a keyslot besides tpm2-kira's, to authorise it (cryptsetup luksAddKey)"
 	case c.routeStep().Done == "":
-		return "needs the key's route (step 1)"
+		return "needs the key's route (Boot chain)"
 	}
 	return ""
 }
@@ -367,7 +342,7 @@ func (c *controller) diskSteps() []controlStep {
 	case f.Keys == "":
 		tpmSalt.Blocked = "needs the signing key"
 	case strong == nil:
-		tpmSalt.Blocked = "needs slot 0 (Signing key and TOTP codes)"
+		tpmSalt.Blocked = "needs slot 0 (Keys & slots)"
 	case len(c.boundKeyslots(strong.Slot, diskkey.RecipeTPMSalt)) > 0:
 		tpmSalt.Done = strings.Join(c.boundKeyslots(strong.Slot, diskkey.RecipeTPMSalt), ", ")
 	}
@@ -379,13 +354,13 @@ func (c *controller) diskSteps() []controlStep {
 	case gate != "":
 		remote.Blocked = gate
 	case strong == nil:
-		remote.Blocked = "needs slot 0 (Signing key and TOTP codes)"
+		remote.Blocked = "needs slot 0 (Keys & slots)"
 	case len(c.boundKeyslots(strong.Slot, diskkey.RecipePhoneSalt)) > 0:
 		remote.Done = strings.Join(c.boundKeyslots(strong.Slot, diskkey.RecipePhoneSalt), ", ")
 	case f.Adapter == "":
 		remote.Blocked = "needs a phone, and there is no Bluetooth adapter on this machine"
 	case strong.Phones == 0:
-		remote.Blocked = "needs an enrolled phone (Attestation by phone)"
+		remote.Blocked = "needs an enrolled phone (Phone)"
 	case f.NewImage != "":
 		remote.Blocked = f.NewImage
 	case !f.Closed:
@@ -402,7 +377,7 @@ func (c *controller) diskSteps() []controlStep {
 	return append([]controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt, keyboard}, c.saltRemoveSteps()...)
 }
 
-// debugStep is the boot settings' debug switch, on step 2 itself.
+// debugStep is the boot settings' debug switch (Boot image).
 func (c *controller) debugStep() controlStep {
 	f := &c.facts
 	st := controlStep{Key: "debug", Title: "Debug at boot", Optional: true, SelfConfirm: true,

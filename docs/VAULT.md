@@ -138,7 +138,7 @@ vault's boot state; init warns about that.
 **For each machine:**
 
 1. The machine's boot image needs its network: `tpm2-kira control`,
-   step 2, "Network and SSH at boot" (SSH.md §1); the network is enough,
+   the section "Network & SSH" (SSH.md §1); the network is enough,
    SSH is not needed. `vault enrol` warns when it is off.
 2. On the vault: `tpm2-kira-vault token create --name NAME [--mode
    approve] [--ttl 1h]`. It prints the token, the URL, the pin and the
@@ -152,7 +152,7 @@ vault's boot state; init warns about that.
    image carries the bundle; without it the image has no vault part, and
    `control` says so.
 4. On the machine, with a recovery passphrase in another keyslot - in
-   `tpm2-kira control`, step 2, "Disk unlock", "Salt from a vault": it
+   `tpm2-kira control`, "Disk unlock", "Salt from a vault": it
    sets up the network when there is none, asks the URL, the pin and the
    token, whether the password is held by the TPM (unattended) or typed,
    and the pepper, and the root's file; asks the vault whether it answers,

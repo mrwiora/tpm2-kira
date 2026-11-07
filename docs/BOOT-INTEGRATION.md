@@ -51,7 +51,7 @@ rd.luks.name=<UUID>=cryptroot rd.luks.key=<UUID>=/run/tpm2-kira/unlock.sock
 ```
 
 `tpm2-kira luks route` checks the files the command line comes from and
-prints the line as it should read (`control`'s step 1 writes it when you
+prints the line as it should read (`control`'s boot chain writes it when you
 say so). How the key is then made - asked, derived, or from the vault -
 is the keyslot's token: [DISK-KEY.md](DISK-KEY.md). Then
 rebuild (`sudo mkinitcpio -P`); the post-generation hook approves the new

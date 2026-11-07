@@ -765,7 +765,7 @@ passphrase in its own keyslot opens the disk at cryptsetup's prompt.
                  vault and remove the keyslot by hand
 
 The image needs its network at boot: TPM2_KIRA_NET in control.conf
-(tpm2-kira control, "Network and SSH at boot").
+(tpm2-kira control, "Network & SSH").
 `
 
 // recipeFlags are a keyslot's recipe on the command line: where the

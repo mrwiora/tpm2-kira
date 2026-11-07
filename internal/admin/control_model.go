@@ -28,31 +28,44 @@ const (
 	dangerDestroy
 )
 
-// controlSection is one part of control's screen.
+// controlSection is one part of control: a section of the full screen, a submenu of the
+// line menus' overview.
 type controlSection struct {
 	key, title, intro string
+	required          bool // a protection: the recommendation while open
 }
 
-// controlSections are the full screen's sidebar, in its order.
+// controlSections are control's parts, in their order: the full screen's sidebar, and
+// (but the overview and the boot chain) the line menus' overview.
 var controlSections = []controlSection{
 	{key: "overview", title: "Overview",
-		intro: "What this machine has, judged line by line, and what it combines. Each section on the left sets one part up; the recommended next step is named."},
+		intro: "What this machine has, judged line by line, and what it combines. Each section sets one part up; the recommended next step is named."},
 	{key: "chain", title: "Boot chain",
 		intro: "What tpm2-kira needs of the machine to be in its boot at all: the prerequisites, the hook in the boot image, the key's route. The other sections open when it is in place."},
-	{key: "keys", title: "Keys & slots",
-		intro: menuByKey("keys").intro},
+	{key: "keys", title: "Keys & slots", required: true,
+		intro: "The signing key approves boot states and authorises every write to the TPM; with it the TOTP codes at boot are sealed into slot 0 (the boot as it is) and slot 1 (the fallback for a boot whose kernel changed unpredicted). Everything else builds on them."},
 	{key: "phone", title: "Phone",
-		intro: menuByKey("phone").intro},
+		intro: "A phone (Marify, Bluetooth LE) checks the boot state against what it pinned and shows a code the machine shows too; it replaces Enter at the code screen, and it can hand back the salt of a disk key."},
 	{key: "disk", title: "Disk unlock",
-		intro: menuByKey("disk").intro},
+		intro: "How the disk's key is made at boot, beside the recovery passphrase: each way is a keyslot of its own, and they combine - at boot the one that answers first opens the disk, and cryptsetup's own prompt stays the fallback."},
 	{key: "remote", title: "Network & SSH",
-		intro: menuByKey("remote").intro},
+		intro: "The boot image's own network - for the vault, and for tpm2-kira's SSH server, where the codes are confirmed and passwords typed remotely. Set for the image alone; the running system's network stays as it is."},
 	{key: "image", title: "Boot image",
 		intro: "What the next boot image carries, and the switch that makes the boot log every step. The image is built when control is left, or here."},
 	{key: "tools", title: "Tools",
 		intro: "Views: the commands that read the machine, run as they are and shown here. Nothing in this section changes anything."},
 	{key: "reference", title: "Reference",
 		intro: "The help pages of every command, the expert ones included: what control does not do by itself (luks mark and derive, phone salt rotate, phone quote and verify, the boot's commands) is done there by hand."},
+}
+
+// sectionByKey is the section of a key.
+func sectionByKey(key string) controlSection {
+	for _, s := range controlSections {
+		if s.key == key {
+			return s
+		}
+	}
+	return controlSection{key: key, title: key}
 }
 
 // sectionSteps are the lines of a section.
@@ -68,12 +81,6 @@ func (c *controller) sectionSteps(key string) []controlStep {
 			}
 		}
 		return out
-	case "image":
-		return append(c.imageHints(), c.buildStep(), c.debugStep())
-	case "tools":
-		return c.toolSteps()
-	case "reference":
-		return c.referenceSteps()
 	}
 	return c.menuSteps(key)
 }

@@ -385,6 +385,5 @@ func rowCells(width int) int { return max(width-1, 2) }
 
 // The text measures are tui's, the full screen's too: one count of a row's cells.
 func cells(s string) int                         { return tui.Cells(s) }
-func runeCells(r rune) int                       { return tui.RuneCells(r) }
 func sanitize(s string) string                   { return tui.Sanitize(s) }
 func layout(s string, cols, indent int) []string { return tui.Layout(s, cols, indent) }

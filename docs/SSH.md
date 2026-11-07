@@ -25,7 +25,7 @@ authenticator as at the console. The phone attests at the machine only
 TLS ([VAULT.md](VAULT.md)).
 
 ```bash
-sudo tpm2-kira control      # step 2, "Network and SSH at boot": DHCP or static, proposed
+sudo tpm2-kira control      # the section "Network & SSH": DHCP or static, proposed
                             # from /etc/systemd/network or /etc/network/interfaces;
                             # SSH only when you say yes, the SSH CA created in the TPM;
                             # the image is rebuilt when you quit
@@ -45,8 +45,8 @@ Contents: [1 Configuration](#1-configuration) ·
 
 ## 1. Configuration
 
-Two files, both written by `tpm2-kira control` (step 2, the submenu
-"Network and SSH at boot"): `/etc/tpm2-kira/control.conf` holds what is
+Two files, both written by `tpm2-kira control` (the section
+"Network & SSH"): `/etc/tpm2-kira/control.conf` holds what is
 tpm2-kira's - the image's network, whether the SSH server runs, how long
 the boot waits; `/etc/tpm2-kira/assh.conf`, beside it, what is aSSH's - the
 SSH CA and its slots, the port, the keys that may log in (aSSH's own
@@ -536,7 +536,7 @@ In the session it reads: `cryptsetup asks: Please unlock disk vda3_crypt
 ## 8. Commands
 
 ```
-tpm2-kira control                       step 2, "Network and SSH at boot"
+tpm2-kira control                       the section "Network & SSH"
 tpm2-kira initramfs plan --buildroot DIR [--format mkinitcpio|initramfs-tools]
                            [--conf PATH] [--tpm PATH]
                                         what the hooks call (§2): a part that cannot be had stays out, and says why

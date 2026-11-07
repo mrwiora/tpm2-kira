@@ -316,7 +316,7 @@ The setup:
    of a command that holds it: a refused lock stops it before it asks, `VmLck`, `VmSwap` under
    a hog.
 6. **`control`, answered line by line** (its menus, a pty; the session answers its
-   "[Enter: ...]" holds): step 1's
+   "[Enter: ...]" holds): the boot chain's
    adoptions (the mkinitcpio hook, the key's route), the image's network
    (DHCP, as proposed), the SSH server at boot (port 2222, a 600 s hold)
    with its SSH CA, debug at boot, the image rebuilt when control is left.
@@ -357,7 +357,7 @@ Secure Boot on the same places must say nothing, and the vault's keyslot no reco
 shows said in Setup Mode):
 once in `slot add`, `status`, per image in the hook's output, red in `control`'s step, and at each
 boot on the console (the serial log), in the SSH session and in the boot's log; `slot approve` and
-`control`'s step 2 under `--all`.
+`control`'s overview under `--all`.
 
 **Under `--all`, removal:** `control` switches the SSH server off and asks before it removes the SSH
 CA - No keeps the EFI variable and `ssh_ca.pub`; `slot delete --yes` then takes everything of tpm2-kira:

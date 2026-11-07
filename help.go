@@ -165,7 +165,8 @@ gives it back as it was when it is left. On the left the sections:
                   its removal - and the phone salt's removal
   Network & SSH   the image's network, its address announced, the SSH
                   server with the code screen
-  Boot image      what is out of date and why, build it now, debug at boot
+  Boot image      build it now, debug at boot (what is out of date leads
+                  the Overview)
   Tools           the read-only commands, run as they are
   Reference       every help page
 

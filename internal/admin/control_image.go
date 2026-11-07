@@ -129,7 +129,7 @@ func btImagePlan(adapter string) string {
 	return b.String()
 }
 
-// imageHints is step 2's hint about the boot image: when it is current
+// imageHints is the overview's hint about the boot image: when it is current
 // and this boot did not go through it, reboot - picking it does. An image
 // out of date is rebuilt when control is left.
 func (c *controller) imageHints() []controlStep {
