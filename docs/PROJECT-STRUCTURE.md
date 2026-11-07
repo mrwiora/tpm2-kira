@@ -36,9 +36,11 @@ Where things are in the repository, and how the tests are run.
 │   ├── vaultkey/            # The disk's key from a vault at boot
 │   ├── sshscreen/           # The code screen over SSH: aSSH's server, sessions, the agent,
 │   │                        #   the per-boot host key; ssh-child, the unprivileged half
+│   ├── netstate/            # The boot's network as shown (the screen's line) and the
+│   │                        #   announcement of a new address (ARP, NA, an echo to the gateway)
 │   ├── imageplan/           # What a boot image carries (its parts) and what run starts
 │   ├── bootrun/             # 'run': the code screen's hold, and the parts the plan names
-│   │                        #   (parts.go: phone, SSH, vault, the disk's key, the console),
+│   │                        #   (parts.go: the network, phone, SSH, vault, the disk's key, the console),
 │   │                        #   which share what they offer on a board, not by calling each other
 │   ├── journal/, screen/    # The boot's narration; the [ KIRA ] tag
 │   ├── untrusted/, wipe/    # Quoting unverified strings; overwriting secrets

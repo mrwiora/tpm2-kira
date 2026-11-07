@@ -336,26 +336,26 @@ func TestRemoteTemporaryHostKey(t *testing.T) {
 	if hk.Temporary == "" || hk.CA != "" || hk.Fingerprint != ssh.FingerprintSHA256(hk.Signer.PublicKey()) {
 		t.Fatalf("%+v", hk)
 	}
-	h := ConsoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0, -1)
+	h := ConsoleHint(22, []string{"192.0.2.10 (enp1s0)"}, hk, 0)
 	if !strings.Contains(h, hk.Fingerprint+": a temporary key") || !strings.Contains(h, "no SSH CA at none.json") {
 		t.Fatalf("hint:\n%s", h)
 	}
-	if h := ConsoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:key", CA: "SHA256:abc"}, 0, -1); !strings.Contains(h, "Host key certified by the SSH CA SHA256:abc") {
+	if h := ConsoleHint(22, nil, hostKeyAtBoot{Fingerprint: "SHA256:key", CA: "SHA256:abc"}, 0); !strings.Contains(h, "Host key certified by the SSH CA SHA256:abc") {
 		t.Fatalf("hint:\n%s", h)
 	}
 }
 
 // The console names every address to log in at, the port when it is not
-// 22, and that Enter continues there.
+// 22, and where the password is asked after a confirmation over SSH.
 func TestConsoleHint(t *testing.T) {
-	h := ConsoleHint(2222, []string{"192.0.2.10 (enp1s0)", "2001:db8::10 (enp1s0)"}, hostKeyAtBoot{}, 1, 30*time.Second)
-	for _, want := range []string{"ssh root@192.0.2.10 -p 2222   (enp1s0)", "ssh root@2001:db8::10 -p 2222", "(30 s)", "An SSH session is connected", "Enter here: continue at this console"} {
+	h := ConsoleHint(2222, []string{"192.0.2.10 (enp1s0)", "2001:db8::10 (enp1s0)"}, hostKeyAtBoot{}, 1)
+	for _, want := range []string{"ssh root@192.0.2.10 -p 2222   (enp1s0)", "ssh root@2001:db8::10 -p 2222", "An SSH session is connected", "the password is asked there"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("hint lacks %q:\n%s", want, h)
 		}
 	}
-	if h := ConsoleHint(22, nil, hostKeyAtBoot{}, 0, -1); !strings.Contains(h, "waiting for a network address (port 22)") || strings.Contains(h, "-p 22") || strings.Contains(h, " s)") {
-		t.Errorf("no address, no limit:\n%s", h)
+	if h := ConsoleHint(22, nil, hostKeyAtBoot{}, 0); !strings.Contains(h, "port 22, once the network has an address") || strings.Contains(h, "-p 22") {
+		t.Errorf("no address:\n%s", h)
 	}
 }
 

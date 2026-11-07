@@ -336,7 +336,7 @@ func decidePlan(in planInputs) *BootPlan {
 				p.Warnings = append(p.Warnings, "the running system's DHCP identity is "+in.DHCP.From+": the image asks with its MAC and may get another address than the running system (TPM2_KIRA_NET_DHCP_ID sets it)")
 			}
 		}
-		add(imageplan.PartNet, true, why, net.Mode, net.Match, strings.Join(net.Addresses, " "), strings.Join(net.Gateways, " "), strings.Join(net.DNS, " "), hex.EncodeToString(in.DHCP.ID))
+		add(imageplan.PartNet, true, why, net.Mode, net.Match, strings.Join(net.Addresses, " "), strings.Join(net.Gateways, " "), strings.Join(net.DNS, " "), hex.EncodeToString(in.DHCP.ID), fmt.Sprint(net.Announce))
 	}
 
 	switch {
@@ -507,10 +507,12 @@ func (p *BootPlan) WriteImage(buildroot, format string, out io.Writer) error {
 		if !p.Has(imageplan.PartSSH) {
 			r.SSH.On = false
 		}
+		// Both formats: run reads the mode, the match and the announcement
+		// from it (netstate); initramfs-tools' scripts the rest.
+		if err := writeImageFile(buildroot, imageRemoteConf, []byte(remoteConf(r, in.DHCP)), 0o644); err != nil {
+			return err
+		}
 		if format == FormatInitramfsTools {
-			if err := writeImageFile(buildroot, imageRemoteConf, []byte(remoteConf(r, in.DHCP)), 0o644); err != nil {
-				return err
-			}
 			if in.DHCP.ID != nil {
 				if err := writeImageFile(buildroot, imageUdhcpcScript, []byte(udhcpcScript), 0o755); err != nil {
 					return err

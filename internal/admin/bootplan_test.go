@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/netstate"
 	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
 	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
@@ -297,6 +298,7 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		phonegate.DefaultAttestSignerPath: "BEGIN PUBLIC KEY",
 		"/" + BTUdevRuleFile:              `KERNEL=="3-10"`,
 		imageNetworkFile:                  "DHCP=yes",
+		imageRemoteConf:                   `TPM2_KIRA_NET_ANNOUNCE="on"`,
 		"/etc/tpm2-kira/authorized_keys":  admin + "\n",
 		sshscreen.DefaultConf:             "ASSH_CA=efi:KIRAasshCA\n",
 		imageRunDropIn:                    `"TPM2_KIRA_REMOTE=--ssh --ssh-hold=0"`,
@@ -305,6 +307,10 @@ func TestWriteImageMkinitcpio(t *testing.T) {
 		if got := readImage(t, root, path); !strings.Contains(got, want) {
 			t.Errorf("%s: %q, want %q", path, got, want)
 		}
+	}
+	// run reads the network's settings from the same file on both formats.
+	if c, ok := netstate.ReadConfig(filepath.Join(root, imageRemoteConf)); !ok || c.Mode != "dhcp" || !c.Announce {
+		t.Errorf("run's view of the network: %+v %v", c, ok)
 	}
 	// The CA is not in the image: run reads its EFI variable.
 	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

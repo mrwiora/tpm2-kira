@@ -12,6 +12,7 @@ import (
 
 	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
+	"github.com/tpm2-trust/tpm2-kira/internal/netstate"
 	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 	"github.com/tpm2-trust/tpm2-kira/internal/screen"
 	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
@@ -80,7 +81,7 @@ func (s *startedParts) end(bd *board) {
 
 // parts are the parts of one boot; nil is a part the plan does not name.
 type parts struct {
-	phone, ssh, vault, tpmSalt, unlock, console part
+	net, phone, ssh, vault, tpmSalt, unlock, console part
 }
 
 // plannedParts is the parts the image's plan and the SSH settings name. The
@@ -88,6 +89,9 @@ type parts struct {
 // nothing without a socket, the second is Enter.
 func plannedParts(planned imageplan.Planned, remote sshscreen.Options, unlockSocket string) parts {
 	ps := parts{unlock: &unlockPart{socket: unlockSocket}, console: &consolePart{}}
+	if planned.Net {
+		ps.net = &netPart{conf: netstate.ImageConf}
+	}
 	if planned.Phone {
 		ps.phone = &phonePart{}
 	}
@@ -106,7 +110,7 @@ func plannedParts(planned imageplan.Planned, remote sshscreen.Options, unlockSoc
 // inOrder is the parts there are, in the order they start.
 func (ps parts) inOrder() []part {
 	var out []part
-	for _, p := range []part{ps.phone, ps.ssh, ps.vault, ps.tpmSalt, ps.unlock, ps.console} {
+	for _, p := range []part{ps.net, ps.phone, ps.ssh, ps.vault, ps.tpmSalt, ps.unlock, ps.console} {
 		if p != nil {
 			out = append(out, p)
 		}
@@ -154,9 +158,11 @@ type board struct {
 	// screen held; nil without one.
 	tpmSalt func(slot int) []byte
 	// remote shows the code screen in the SSH sessions, and hint says on the
-	// console where they are; nil: the code screen is the console's.
+	// console where they are; nil: the code screen is the console's alone.
 	remote func(screen []byte)
-	hint   func(remaining time.Duration)
+	hint   func()
+	// network is the image's network now; nil without one.
+	network func() netstate.Status
 	// serving: the disk's key provider answers, so run stays when the hold
 	// is over, until it is stopped.
 	serving bool
@@ -238,6 +244,104 @@ func (p *phonePart) end(*board) {
 	}
 	if p.svc != nil {
 		p.svc.Forget()
+	}
+}
+
+// netPart watches the image's network: its state is the code screen's
+// line, a change of it is said on the console at once - and, while it
+// waits, again every netRemind - until the hold ends; each new address is
+// announced to the neighbours (TPM2_KIRA_NET_ANNOUNCE). networkd or the
+// image's scripts bring the network up; this part configures nothing.
+type netPart struct {
+	conf    string // the image's settings
+	mu      sync.Mutex
+	st      netstate.Status
+	quiet   chan struct{} // closed at the release: nothing more is said
+	quit    chan struct{}
+	quietly sync.Once
+	ended   sync.Once
+}
+
+// How often the network is looked at, and how often a network that is not
+// up yet is said again.
+var (
+	netPoll   = 500 * time.Millisecond
+	netRemind = 15 * time.Second
+)
+
+func (p *netPart) start(bd *board) {
+	cfg, ok := netstate.ReadConfig(p.conf)
+	if !ok {
+		return
+	}
+	r := netstate.NewReader(cfg)
+	log := diskkey.UnlockLogger(bd.debug)
+	var ann *netstate.Announcer
+	if cfg.Announce {
+		ann = netstate.NewAnnouncer(log)
+	}
+	p.quiet, p.quit = make(chan struct{}), make(chan struct{})
+	began := time.Now()
+	p.st = r.Read(0)
+	bd.network = func() netstate.Status {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.st
+	}
+	say := func(st netstate.Status) {
+		select {
+		case <-p.quiet:
+			return
+		default:
+		}
+		if bd.prompting() {
+			return // the prompt owns the console
+		}
+		fmt.Printf("%s %s\n", screen.Tag(screen.TagYellow), st.Line())
+	}
+	say(p.st)
+	log("network: " + p.st.Key())
+	go func() {
+		key, said := p.st.Key(), time.Now()
+		t := time.NewTicker(netPoll)
+		defer t.Stop()
+		for {
+			select {
+			case <-p.quit:
+				return
+			case <-t.C:
+			}
+			st := r.Read(time.Since(began))
+			p.mu.Lock()
+			p.st = st
+			p.mu.Unlock()
+			switch k := st.Key(); {
+			case k != key:
+				key, said = k, time.Now()
+				log("network: " + k)
+				say(st)
+			case st.Kind() != netstate.Up && time.Since(said) >= netRemind:
+				said = time.Now()
+				say(st)
+			}
+			if ann != nil {
+				ann.Seen(st)
+			}
+		}
+	}()
+}
+
+// After the hold the console is the prompt's: the network is no longer
+// said, but a new address is still announced.
+func (p *netPart) released(*board, string) {
+	if p.quiet != nil {
+		p.quietly.Do(func() { close(p.quiet) })
+	}
+}
+
+func (p *netPart) end(*board) {
+	if p.quit != nil {
+		p.ended.Do(func() { close(p.quit) })
 	}
 }
 

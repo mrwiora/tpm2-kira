@@ -18,12 +18,15 @@ const Dir = "/etc/tpm2-kira/plan"
 // Planned is what 'run' starts, from the image's ImagePlanDir.
 type Planned struct {
 	Codes, Phone, Vault, TPMSalt bool
+	// Net: the image brings a network up; run shows its state and
+	// announces its address (netstate).
+	Net bool
 	// TPM: a part needs the TPM, and run waits for its device first.
 	TPM bool
 }
 
 // AllPlanned is 'run' without a plan, by hand: everything it finds.
-var All = Planned{Codes: true, Phone: true, Vault: true, TPMSalt: true, TPM: true}
+var All = Planned{Codes: true, Phone: true, Vault: true, TPMSalt: true, TPM: true, Net: true}
 
 // ReadPlanned reads the parts an image names in dir.
 func Read(dir string) Planned {
@@ -31,7 +34,7 @@ func Read(dir string) Planned {
 		st, err := os.Stat(filepath.Join(dir, name))
 		return err == nil && st.IsDir()
 	}
-	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault), TPMSalt: has(PartTPMSalt), TPM: has(PartTPM)}
+	return Planned{Codes: has(PartCodes), Phone: has(PartPhone), Vault: has(PartVault), TPMSalt: has(PartTPMSalt), TPM: has(PartTPM), Net: has(PartNet)}
 }
 
 // The parts, in the order they are told.

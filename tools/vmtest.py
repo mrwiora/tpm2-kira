@@ -774,7 +774,8 @@ class Machine:
             if not mac:
                 raise Fail("control proposes no interface:\n" + text[-800:])
             s.expect(r"Interface: its MAC address, or its name ?$"); s.send(mac[-1] + "\n")
-            self.check("control: the boot image's network, DHCP on " + mac[-1], True)
+            pick(r"^On \(recommended\)$")
+            self.check("control: the boot image's network, DHCP on " + mac[-1] + ", announced", True)
 
             pick(r"SSH server at boot")
             s.expect(r"Start the SSH server with the code screen\? \[y/N\] ?$"); s.send("y\n")
@@ -880,6 +881,17 @@ class Machine:
         self.check_secure_boot(f"boot {n}: the SSH session, at its start", text)
         lv = getattr(self, "lv", None)
         if lv:
+            # The console shows the session's screen too: the codes, the
+            # network's line, and that Enter there continues at the console.
+            want = (r"^#\d+: \d{6}\s*$", r"Network \((DHCP|static)\)[^\n]* on ", r"Enter here: continue to .* at this console")
+            console, deadline = "", time.time() + 15
+            while time.time() < deadline:
+                console = lv.serial_text(console_from)
+                if all(re.search(w, console, re.M) for w in want):
+                    break
+                time.sleep(0.5)
+            self.check(f"boot {n}: the console shows the codes, the network's line and Enter there, as the session does",
+                       all(re.search(w, console, re.M) for w in want), console[-600:])
             self.check_secure_boot(f"boot {n}: the console", lv.serial_text(console_from))
         return text
 
@@ -928,7 +940,12 @@ class Machine:
         if not self.check(f"boot {n}: the system comes up (ssh)", self.wait_port(22, True, 300)):
             raise Fail("the system does not come up")
         self.lap("the initrd's end to ssh")
-        self.after_boot(n)
+        got = self.after_boot(n)
+        out = got["log"]
+        self.check(f"boot {n}: the boot's log follows the network until it has an address",
+                   re.search(r"network: Network \(DHCP\): \S+ on ", out) is not None, out[-500:])
+        self.check(f"boot {n}: the address was announced to the neighbours (TPM2_KIRA_NET_ANNOUNCE)",
+                   re.search(r"network: announced \S+ on \S+ to the neighbours", out) is not None, out[-500:])
 
     # PID 1's lines alone: sudo's log of this very command names the words too.
     VOLUME_ORDER = ("journalctl -b -o cat --no-pager -u tpm2-kira-close.service -u 'systemd-cryptsetup@*' | grep -E '^(Starting|Finished) '; "
