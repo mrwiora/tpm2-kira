@@ -71,6 +71,18 @@ If no firmware line appears: power the machine off (a cold start loads the
 firmware and logs it), boot, and rebuild with `mkinitcpio -P`. More in
 [DEBUG-BLE.md](DEBUG-BLE.md).
 
+**"Failed to start Early TPM SRK Setup" on the console (Arch, systemd 262):**
+systemd's own `systemd-tpm2-setup-early.service`, in the initrd, not tpm2-kira's: it
+finds the SRK and saves its public key, then fails to initialize systemd's NvPCRs
+(`/usr/lib/nvpcr/*.nvpcr`: "Failed to initialize NvPCR index: No such file or
+directory") and exits 1. The same happens without tpm2-kira installed (a fresh VM,
+2026-11-07); `systemd-tpm2-setup.service` in the booted system then finishes. Nothing of
+tpm2-kira's uses the SRK or the NvPCRs (its slots are NV indices 0x01803000 and up, its
+objects under its own storage primary), and the boot unlocks all the same.
+```bash
+journalctl -b -u systemd-tpm2-setup-early.service -u systemd-tpm2-setup.service -o cat
+```
+
 **Debug output** (the codes themselves are only on the boot's code screen; with
 "Debug at boot" in `control` the boot's log says every step):
 ```bash
