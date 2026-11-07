@@ -5,30 +5,16 @@
 package admin
 
 import (
-	"crypto"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/tpm2-trust/tpm2-kira/core/attest"
-	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
-	"github.com/tpm2-trust/tpm2-kira/internal/imageplan"
 	"github.com/tpm2-trust/tpm2-kira/internal/measure"
 	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
-	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 	"github.com/tpm2-trust/tpm2-kira/internal/prompt"
-	"github.com/tpm2-trust/tpm2-kira/internal/sbstate"
 	"github.com/tpm2-trust/tpm2-kira/internal/screen"
-	"github.com/tpm2-trust/tpm2-kira/internal/signing"
-	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
-	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
-	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 	"golang.org/x/sys/unix"
 )
 
@@ -56,355 +42,16 @@ type ControlOptions struct {
 	TPMPath string
 	Debug   bool
 	Out     io.Writer // default stdout
-}
-
-// machineFacts is what the analysis found.
-type machineFacts struct {
-	TPM        string
-	TPMErr     string
-	SHA256Bank bool
-	SHA1Bank   bool
-	LogRead    bool // the event log can be read
-	LogSHA256  bool // and carries SHA-256 digests
-	UseSHA1    bool // the only way on this machine (SHA1Why says why)
-	SHA1Why    string
-	PCRs       string
-	PCRsWhy    string
-	Keys       string // "" when setup has not run; else what the key is
-	YubiKey    bool   // the key is on a YubiKey that wants a PIN
-	PINStored  bool   // the PIN file holds the PIN, root's alone
-	PINLoose   bool   // the PIN file holds the PIN, but others can read it
-	EKBy       string // the vendor whose chain vouches for this TPM's EK; "" when none does
-	EKNote     string // why none does
-	EKUnknown  bool   // the EK root store has no root of the TPM's vendor yet: a risk, not untrusted
-	SecureBoot sbstate.State
-	Proof      *secureBootProof // what a phone and the vault will establish; nil when it cannot be read
-	// MemoryMiB is the machine's RAM as its kernel counts it, 0 when it could
-	// not be read; below diskkey.MinMemoryMiB the boot's derivation may not fit.
-	MemoryMiB  uint64
-	Initramfs  string // mkinitcpio, initramfs-tools, or ""
-	HookState  string // why the boot integration would not run; "" when wired
-	Rebuild    string // mkinitcpio: why the image still lacks the hook; "" when it carries it
-	Adapter    string // hciN, or ""
-	AttestConf string // "" when control.conf loads; else the reason
-
-	Status   StatusReport   // the slots, the unlock mode, the LUKS devices, the notes
-	Dirt     []SlotContents // slots whose blob is gone but of which parts remain
-	Phone    bool           // a phone is enrolled for some slot
-	Salt     bool           // a phone salt is enrolled for some slot
-	BTAlways bool           // Bluetooth is packed into every image (control.conf)
-	// BTFirmware is the adapter's firmware as the image build will find it
-	// (attest_initramfs.go); empty when no log named it and none is
-	// remembered, so the image may not start the adapter.
-	BTFirmware []string
-	// BTAuthorize is the adapter's USB device when its bus lets no new
-	// device in by itself, so the image needs a rule for it; nil when not.
-	BTAuthorize *USBDevice
-	// BootDebug is the boot settings' debug switch (bootsettings.go).
-	BootDebug bool
-	// Plan is what a build of the boot image now carries (bootplan.go).
-	Plan *BootPlan
-	// Pending are the reasons the boot image is out of date: a file of the
-	// boot chain changed after it, or a part of the plan in use now is not
-	// in it, or with other settings. Empty when the image is as it should
-	// be. Control rebuilds it when it is left.
-	Pending []string
-	// Unused are the parts the image carries that nothing uses any more:
-	// no reason to rebuild, the next build leaves them out.
-	Unused []string
-	// ImageErr says why the image's plan could not be read.
-	ImageErr string
-	// HookInstalled: the hook files of the initramfs system are in place.
-	HookInstalled bool
-	// Hooks is mkinitcpio's HOOKS as it would build with them.
-	Hooks []string
-	// PCRKey: the PCR key exists; UKISigns: uki.conf has ukify sign with it;
-	// UKISigErr: why the image built does not carry what the slots need.
-	PCRKey    bool
-	UKISigns  bool
-	UKISigErr string
-	// NoRecovery are the LUKS devices without a keyslot that is not
-	// tpm2-kira's: nothing to authorise an enrolment, no way in by hand.
-	NoRecovery []string
-	// EmptyPass are the keyslots that open with an empty passphrase,
-	// "keyslot N of /dev/x"; EmptyPassErr says why the test did not run.
-	EmptyPass    []string
-	EmptyPassErr string
-	Wired        int // wired network interfaces: the image's network needs one
-	// PlainSwap are the swaps a hibernation would write the memory to in
-	// the clear (swap.go); empty when the kernel offers no hibernation.
-	PlainSwap []string
-	// SSHKeys is how many keys may log in at boot (-1: the file cannot be
-	// read); SSHCA the SSH CA and its approval of the next boot. Both only
-	// with SSH on.
-	SSHKeys int
-	SSHCA   sshCAState
-	// SSHCAOtherKey: the SSH CA was made for another signing key than this
-	// machine's, so reseal cannot approve it.
-	SSHCAOtherKey bool
-	// Vaults is each vault-enrolled slot's vault, asked now.
-	Vaults   map[int]vaultkey.CheckResult
-	Closed   bool   // PCR 15 is extended: this boot went through the code screen's close
-	NewImage string // an image was rebuilt after this boot started; "" when not
-	Routed   map[string]bool
-	Route    []RouteFinding // the route's findings, for the step that writes the fixes
-	Remote   RemoteConfig   // the boot image's network and SSH server (control.conf)
-}
-
-// collectFacts is the analysis.
-func collectFacts(tpmPath string, debug bool) machineFacts {
-	f := machineFacts{TPM: tpmPath, Routed: map[string]bool{}}
-
-	if tpmDev, err := tpmdev.Open(tpmPath); err != nil {
-		f.TPMErr = err.Error()
-	} else {
-		f.SHA256Bank = measure.TPMHasPCRBank(tpmDev, measure.PCRHashAlgoSHA256)
-		f.SHA1Bank = measure.TPMHasPCRBank(tpmDev, measure.PCRHashAlgoSHA1)
-		tpmDev.Close()
-	}
-	if _, err := measure.ReadRawEventLogFromPath(measure.DefaultEventlogPath); err == nil {
-		f.LogRead = true
-		if d, err := measure.EventDigestsForPCR(measure.DefaultEventlogPath, 0, measure.PCRHashAlgoSHA256); err == nil && len(d) > 0 {
-			f.LogSHA256 = true
-		}
-	}
-	// The SHA-1 bank is for a TPM without a SHA-256 bank, and for a
-	// firmware whose event log measures into the SHA-1 bank alone (then
-	// the SHA-256 registers hold nothing the boot put there). Without a
-	// log to read the registers decide, and SHA-256 is what seal reads.
-	switch {
-	case f.TPMErr != "" || !f.SHA1Bank:
-	case !f.SHA256Bank:
-		f.UseSHA1, f.SHA1Why = true, "no SHA-256 bank"
-	case f.LogRead && !f.LogSHA256:
-		f.UseSHA1, f.SHA1Why = true, "the event log has no SHA-256 digests"
-	}
-	algo := measure.PCRHashAlgoSHA256
-	if f.UseSHA1 {
-		algo = measure.PCRHashAlgoSHA1
-	}
-	f.PCRs, f.PCRsWhy = DefaultPCRSelection("", algo)
-
-	if _, err := os.Stat(signing.DefaultPrivateKeyPath); err == nil {
-		f.Keys = "local key files in " + signing.DefaultKeysDir
-		if k, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath); err == nil {
-			if desc, ok := signing.YubiKeyDescription(k); ok {
-				f.Keys = desc
-				f.YubiKey = signing.YubiKeyWantsPIN(k)
-			}
-		}
-	}
-	if stored, loose := signing.PINStored(signing.PINPath()); stored {
-		f.PINStored, f.PINLoose = !loose, loose
-	}
-	f.SecureBoot = sbstate.Read()
-	if f.TPMErr == "" {
-		bank := uint16(attest.AlgSHA256)
-		if f.UseSHA1 {
-			bank = attest.AlgSHA1
-		}
-		f.Proof = readSecureBootProof(tpmPath, bank)
-	}
-	f.MemoryMiB = diskkey.MemTotalMiB()
-	if f.TPMErr == "" {
-		f.EKBy, f.EKNote, f.EKUnknown = ekVerdict(tpmPath, debug)
-	}
-	switch {
-	case fileExists(mkinitcpioConf):
-		f.Initramfs = "mkinitcpio"
-	case isDebianInitramfs():
-		f.Initramfs = "initramfs-tools"
-	}
-	f.HookState = initramfsHookState(f.Initramfs)
-	switch f.Initramfs {
-	case "mkinitcpio":
-		f.HookInstalled = mkinitcpioHookInstalled()
-		f.Hooks = mkinitcpioHooks(mkinitcpioConf)
-		_, keyErr := os.Stat(pcrKeyPath)
-		f.PCRKey, f.UKISigns = keyErr == nil, ukiConfSigns()
-		if f.UKISigns {
-			f.UKISigErr = "no unified kernel image found"
-			if uki := findUKI(); uki != "" {
-				f.UKISigErr = ukiSignedReason(uki)
-			}
-		}
-		if f.HookState == "" {
-			f.Rebuild = rebuildPending(mkinitcpioConf)
-		}
-	case "initramfs-tools":
-		f.HookInstalled = debianScriptInstalled()
-	}
-	for _, it := range physicalInterfaces() {
-		if !it.Wireless {
-			f.Wired++
-		}
-	}
-	if m, _ := filepath.Glob("/sys/class/bluetooth/hci*"); len(m) > 0 {
-		f.Adapter = filepath.Base(m[0])
-		if deps := adapterDeps(f.Adapter); deps != nil {
-			f.BTFirmware, f.BTAuthorize = deps.Firmware, deps.Authorize
-		}
-	}
-	if cfg, err := LoadControlConfig(controlConfigPath()); err != nil {
-		f.AttestConf = err.Error()
-	} else {
-		f.BTAlways = cfg.Attest.Bluetooth == "always"
-		f.Remote = cfg.Remote
-	}
-	if f.Remote.SSH.On {
-		f.SSHKeys = authorizedKeyCount(f.Remote.SSH.Assh.AuthorizedKeys)
-	}
-
-	f.Status = collectStatus(StatusOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
-	if f.TPMErr == "" {
-		f.BootDebug = nvslot.BootDebug(tpmPath)
-		if tpmDev, err := tpmdev.Open(tpmPath); err == nil {
-			f.Closed = nvslot.Closed(tpmDev)
-			tpmDev.Close()
-		}
-	}
-	if f.TPMErr == "" {
-		f.Dirt = collectDirt(tpmPath, f.Status.Devices)
-	}
-	f.NoRecovery, f.EmptyPass, f.EmptyPassErr = recoveryFacts(f.Status.Devices)
-	f.PlainSwap = plainSwaps()
-	for _, s := range f.Status.Slots {
-		if s.Vault != "" {
-			if f.Vaults == nil {
-				f.Vaults = map[int]vaultkey.CheckResult{}
-			}
-			f.Vaults[s.Slot] = vaultkey.Check(s.Vault, s.VaultPin, s.VaultDevice, 5*time.Second)
-		}
-		f.Phone = f.Phone || s.Phones > 0
-		f.Salt = f.Salt || s.PhoneSalt
-	}
-	if f.Initramfs == "mkinitcpio" {
-		f.NewImage = imageNewerThanBoot()
-	}
-	f.Plan = ReadBootPlan(PlanOptions{TPMPath: tpmPath, ConfigPath: controlConfigPath(), Debug: debug})
-	f.SSHCA = f.Plan.in.SSHCA
-	if f.SSHCA.CA != nil && f.Plan.in.TPMErr == "" {
-		// The plan needs the CA to load; control the approvals of the
-		// next boot's values too.
-		f.SSHCA = readSSHCA(f.Plan.in.Config.Remote.SSH.Assh, tpmPath)
-	}
-	if f.SSHCA.CA != nil {
-		if pub, err := signing.LoadCheckedSigningPublicKey(signing.DefaultPublicKeyPath); err == nil {
-			f.SSHCAOtherKey = !samePublicKey(f.SSHCA.CA.AuthorityKey(), pub)
-		}
-	}
-	if f.HookState == "" {
-		f.Pending, f.Unused, f.ImageErr = imageState(f.Initramfs, f.Plan)
-		if f.Rebuild != "" {
-			f.Pending = append([]string{f.Rebuild}, f.Pending...)
-		}
-		if f.UKISigns && f.UKISigErr != "" {
-			f.Pending = append(f.Pending, "the image lacks the PCR key's signature of PCR 11")
-		}
-	}
-	var devices []string
-	for _, d := range f.Status.Devices {
-		devices = append(devices, d.Device)
-	}
-	if len(devices) > 0 {
-		if findings, err := RouteFindings(devices, nil, ""); err == nil {
-			f.Route = findings
-			for _, r := range findings {
-				if r.Routed {
-					f.Routed[r.Device] = true
-				}
-			}
-		}
-	}
-	return f
+	// Lines forces the numbered line menus instead of the full screen.
+	Lines bool
+	// HelpTopics are the pages of 'tpm2-kira help', for the Reference section.
+	HelpTopics []string
 }
 
 // emptyPassSeen caches the empty-passphrase test of a keyslot for this
 // run, by device and the keyslot's KDF salt - a new passphrase is a new
 // salt - since each test is a full key derivation.
 var emptyPassSeen = map[string]bool{}
-
-// recoveryFacts judges the keyslots that are not tpm2-kira's: the devices
-// that have none (no recovery passphrase), and those that open with an
-// empty passphrase (an encrypted disk anybody opens).
-func recoveryFacts(devices []LuksDeviceStatus) (noRecovery, empty []string, testErr string) {
-	for _, d := range devices {
-		if d.Error != "" {
-			continue
-		}
-		recovery := false
-		for _, ks := range d.Keyslots {
-			if ks.Token != nil {
-				continue
-			}
-			recovery = true
-			key := d.Device + "|" + strconv.Itoa(ks.Keyslot) + "|" + ks.Salt
-			opens, seen := emptyPassSeen[key]
-			if !seen {
-				var err error
-				if opens, err = emptyPassphraseOpens(d.Device, ks.Keyslot); err != nil {
-					testErr = err.Error()
-					continue
-				}
-				emptyPassSeen[key] = opens
-			}
-			if opens {
-				empty = append(empty, fmt.Sprintf("keyslot %d of %s", ks.Keyslot, d.Device))
-			}
-		}
-		if !recovery {
-			noRecovery = append(noRecovery, d.Device)
-		}
-	}
-	return noRecovery, empty, testErr
-}
-
-// weakSlots are the slots whose selection leaves the kernel, the initrd
-// or the command line unmeasured (the fallback is weak by design and not
-// counted).
-func weakSlots(f *machineFacts) []int {
-	var weak []int
-	for _, s := range f.Status.Slots {
-		if s.Fallback {
-			continue
-		}
-		specs, err := measure.ParsePCRSpecs(s.PCRs)
-		if err != nil {
-			continue
-		}
-		if kernelInitrd, cmdline := measure.BootChainCoverage(measure.PCRSpecIndices(specs)); !kernelInitrd || !cmdline {
-			weak = append(weak, s.Slot)
-		}
-	}
-	return weak
-}
-
-// ekVerdict is what a phone concludes about this TPM's endorsement key:
-// the vendor whose certificate chain vouches for it, or why none does.
-func ekVerdict(tpmPath string, debug bool) (by, note string, unknown bool) {
-	tpmDev, err := tpmdev.Open(tpmPath)
-	if err != nil {
-		return "", err.Error(), false
-	}
-	defer tpmDev.Close()
-	defer tpmdev.Cleanup(tpmDev, debug)
-	alg, ek, pub, err := phonegate.PickCertifiedEK(tpmDev)
-	if err != nil {
-		return "", err.Error(), false
-	}
-	tpmdev.FlushHandle(tpmDev, ek.Handle)
-	leaf := phonegate.ReadEKCert(tpmDev, alg)
-	by, err = attest.VerifyEKCertificate(pub, leaf, phonegate.ReadEKCertChain(tpmDev, leaf), time.Now())
-	if err != nil {
-		return "", attest.EKCertNote(err), attest.IsVendorUnknown(err)
-	}
-	return by, "", false
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
 
 // A line of a screen: a step, an option of a submenu, or a submenu's
 // line on step 2 (Menu). Every populated slot is a line of its own, and
@@ -422,6 +69,12 @@ type controlStep struct {
 	SelfConfirm bool   // Run confirms by itself; picked straight even when Done
 	Menu        string // picking opens this screen instead of running anything
 	Run         func(c *controller) error
+	// Danger is how much it can break (dangerChange, dangerView, dangerDestroy);
+	// Destroys says what a destroying step removes. Command is what the step equals
+	// on the command line (annotate).
+	Danger   int
+	Destroys string
+	Command  string
 }
 
 // The one colour language of the overview: green is good and done, orange
@@ -449,6 +102,40 @@ type controller struct {
 	// screen is what the overview shows: "chain" (step 1), "hub" (step 2)
 	// or one of step 2's submenus (controlMenus).
 	screen string
+	// in is the terminal the full screen reads (default stdin); fast and slow
+	// collect the facts (default fastFacts, slowFacts): the tests' own.
+	in   *os.File
+	fast func(tpmPath string, debug bool) machineFacts
+	slow func(*machineFacts)
+}
+
+// look is the facts, collected whole.
+func (c *controller) look() machineFacts {
+	f := c.fastFacts()
+	c.slowFacts(&f)
+	return f
+}
+
+func (c *controller) fastFacts() machineFacts {
+	if c.fast != nil {
+		return c.fast(c.o.TPMPath, c.o.Debug)
+	}
+	return fastFacts(c.o.TPMPath, c.o.Debug)
+}
+
+func (c *controller) slowFacts(f *machineFacts) {
+	if c.slow != nil {
+		c.slow(f)
+		return
+	}
+	slowFacts(f)
+}
+
+func (c *controller) input() *os.File {
+	if c.in != nil {
+		return c.in
+	}
+	return os.Stdin
 }
 
 // ControlNeedsRoot is control's answer when it is not root: its screen,
@@ -496,11 +183,14 @@ func Control(o ControlOptions) error {
 	// twice. Run by hand, seal and reseal keep them.
 	defer func(old bool) { measure.AdvisoryWarnings = old }(measure.AdvisoryWarnings)
 	measure.AdvisoryWarnings = false
+	if c.fullScreen() {
+		return c.screenLoop()
+	}
 	for {
 		if c.tty { // the overview is a page of its own: what the last step printed was read before "Continue"
 			fmt.Fprint(c.out, clearScreen+"\n\033[2mLooking at this machine ...\033[0m\n")
 		}
-		c.facts = collectFacts(o.TPMPath, o.Debug)
+		c.facts = c.look()
 		if c.screen == "" { // the start: step 1 until the boot chain is in place
 			c.screen = "hub"
 			if !chainDone(&c.facts) {
@@ -558,11 +248,11 @@ func Control(o ControlOptions) error {
 func (c *controller) screenSteps() []controlStep {
 	switch c.screen {
 	case "chain":
-		return c.chainSteps()
+		return c.annotated(c.chainSteps())
 	case "hub":
-		return c.hubSteps()
+		return c.annotated(c.hubSteps())
 	}
-	return append(c.menuSteps(c.screen), controlStep{Key: "back", Title: "Back to step 2", Optional: true, Menu: "hub"})
+	return append(c.annotated(c.menuSteps(c.screen)), controlStep{Key: "back", Title: "Back to step 2", Optional: true, Menu: "hub"})
 }
 
 // screenTitle names the screen, under the header.
@@ -626,6 +316,8 @@ func stepLabel(s controlStep) string {
 	switch {
 	case s.Dirty != "":
 		return indent + bad("!") + " " + s.Title + "  - " + s.Dirty
+	case s.Done != "" && s.Danger == dangerDestroy:
+		return indent + good("✓") + " " + s.Title + "  - " + s.Done + "  " + bad("(picking it destroys it)")
 	case s.Done != "":
 		return indent + good("✓") + " " + s.Title + "  - " + s.Done
 	case s.Blocked != "":
@@ -634,6 +326,8 @@ func stepLabel(s controlStep) string {
 		return "  " + s.Title
 	case s.Menu != "":
 		return indent + amber("•") + " " + s.Title + "  >"
+	case s.Danger == dangerView:
+		return indent + "  " + s.Title
 	}
 	return indent + amber("•") + " " + s.Title
 }
@@ -705,190 +399,6 @@ func bad(s string) string  { return "\033[0;31m" + s + "\033[0m" }
 // warn is orange: not a risk, but nothing to leave as it is.
 func warn(s string) string  { return "\033[0;33m" + s + "\033[0m" }
 func amber(s string) string { return "\033[0;33m" + s + "\033[0m" }
-
-// factsText is "What this machine has", one line per fact, each marked
-// green when it is as it should be and red with the risk in brackets
-// when it is not.
-// memoryNeed is the floor, as the memory lines say it.
-func memoryNeed() string { return fmt.Sprintf("at least %d MiB", diskkey.MinMemoryMiB) }
-
-func (c *controller) factsText() string {
-	f := &c.facts
-	var w strings.Builder
-	switch {
-	case f.TPMErr != "":
-		fmt.Fprintf(&w, "  TPM         %s\n", bad(fmt.Sprintf("none usable (%s)", f.TPMErr)))
-	case f.UseSHA1:
-		fmt.Fprintf(&w, "  TPM         %s\n", warn(fmt.Sprintf("%s - %s; the SHA-1 bank is used (risk: SHA-1 collisions are practical, a measured boot can in principle be forged)", f.TPM, f.SHA1Why)))
-	case f.LogSHA256:
-		fmt.Fprintf(&w, "  TPM         %s\n", good(f.TPM+", SHA-256 bank and event log"))
-	default:
-		fmt.Fprintf(&w, "  TPM         %s, SHA-256 bank; no event log to read, the registers as they are\n", f.TPM)
-	}
-	if f.TPMErr == "" {
-		switch {
-		case f.EKBy != "":
-			fmt.Fprintf(&w, "  Vendor      %s\n", good(f.EKBy+" vouches for the endorsement key"))
-		case f.EKUnknown:
-			fmt.Fprintf(&w, "  Vendor      %s\n", warn("not known yet: "+f.EKNote))
-		default:
-			phone := "a phone trusts it on first use, as it would a software TPM"
-			if f.Phone {
-				phone = "the enrolled phone pinned it on first use, as it would a software TPM"
-			}
-			fmt.Fprintf(&w, "  Vendor      %s\n", bad(fmt.Sprintf("none vouches for the endorsement key: %s (risk: %s)", f.EKNote, phone)))
-		}
-	}
-	switch {
-	case !f.SecureBoot.Known:
-		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("state unknown, "+f.SecureBoot.Why+" (risk: whether PCR 7 attests an enforced policy is unknown)"))
-	case f.SecureBoot.SetupMode:
-		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("Setup Mode (risk: any root user can replace the keys, PCR 7 attests a policy that can be rewritten)"))
-	case f.SecureBoot.Enabled:
-		fmt.Fprintf(&w, "  Secure Boot %s\n", good("enabled"))
-	default:
-		fmt.Fprintf(&w, "  Secure Boot %s\n", bad("disabled (risk: the boot loader and the kernel run unsigned, and PCR 7 records only that)"))
-	}
-	if f.Proof != nil {
-		if line, ok := f.Proof.text(); ok {
-			fmt.Fprintf(&w, "  Proof       %s\n", good(line))
-		} else {
-			fmt.Fprintf(&w, "  Proof       %s\n", bad(line))
-		}
-	}
-	switch {
-	case f.MemoryMiB == 0:
-		fmt.Fprintf(&w, "  Memory      %s\n", bad(fmt.Sprintf("not known (risk: the disk's key takes %s at boot, in an initrd without swap)", memoryNeed())))
-	case f.MemoryMiB < diskkey.MinMemoryMiB:
-		fmt.Fprintf(&w, "  Memory      %s\n", bad(fmt.Sprintf("%d MiB (risk: the disk's key takes %s at boot, in an initrd without swap: the kernel kills what does not fit, and only the passphrase by hand may still work)", f.MemoryMiB, memoryNeed())))
-	default:
-		fmt.Fprintf(&w, "  Memory      %s\n", good(fmt.Sprintf("%d MiB, the boot's Argon2id needs %d", f.MemoryMiB, diskkey.MinMemoryMiB)))
-	}
-	fmt.Fprintf(&w, "  Boot        %s: PCRs %s\n", f.PCRsWhy, f.PCRs)
-	if f.TPMErr == "" {
-		var parts []string
-		for _, s := range f.Status.Slots {
-			p := fmt.Sprintf("%d (%s)", s.Slot, s.PCRs)
-			if s.Fallback {
-				p = fmt.Sprintf("%d (%s, the fallback)", s.Slot, s.PCRs)
-			}
-			parts = append(parts, p)
-		}
-		switch weak := weakSlots(f); {
-		case len(parts) == 0:
-			fmt.Fprintln(&w, "  Slots       none sealed")
-		case len(weak) > 0:
-			fmt.Fprintf(&w, "  Slots       %s\n", bad(fmt.Sprintf("%s - slot %s leaves the kernel, the initrd or the command line unmeasured (risk: a replaced initrd or an edited command line still shows a valid code - approve with 11u, or 8e,9e)",
-				strings.Join(parts, ", "), joinInts(weak))))
-		default:
-			fmt.Fprintf(&w, "  Slots       %s\n", good(strings.Join(parts, ", ")))
-		}
-	}
-	keyDesc := f.Keys
-	if keyDesc == "" {
-		keyDesc = "none yet (setup makes it)"
-	}
-	switch {
-	case f.PINLoose: // a disclosed PIN is a risk whatever key the files describe
-		fmt.Fprintf(&w, "  Key         %s\n", bad(fmt.Sprintf("%s (risk: %s holds the PIN, but other users can read it, or root does not own it - chown root:, chmod 600, consider a new PIN)", keyDesc, signing.PINPath())))
-	case f.Keys == "":
-		fmt.Fprintf(&w, "  Key         %s\n", keyDesc)
-	default:
-		fmt.Fprintf(&w, "  Key         %s\n", good(f.Keys))
-	}
-	switch {
-	case f.Initramfs == "":
-		fmt.Fprintf(&w, "  Initramfs   %s\n", bad("neither mkinitcpio nor initramfs-tools found (risk: no code screen at boot - no boot integration here)"))
-	case f.HookState != "":
-		fmt.Fprintf(&w, "  Initramfs   %s\n", bad(fmt.Sprintf("%s, but %s (risk: the next boot shows no code screen and serves no key)", f.Initramfs, f.HookState)))
-	case f.Initramfs == "mkinitcpio":
-		fmt.Fprintf(&w, "  Initramfs   %s\n", good("mkinitcpio, sd-tpm2-kira in HOOKS"))
-	default:
-		fmt.Fprintf(&w, "  Initramfs   %s\n", good(f.Initramfs))
-	}
-	if f.Status.CloseFinding != "" {
-		fmt.Fprintf(&w, "  Close       %s\n", bad(f.Status.CloseFinding))
-	}
-	phone := f.planHas(imageplan.PartPhone)
-	switch {
-	case f.Adapter != "" && len(f.BTFirmware) == 0 && phone:
-		// It goes into the image: without its firmware the adapter does
-		// not start in the initrd. An adapter that needs none is rare.
-		fmt.Fprintf(&w, "  Bluetooth   %s\n", bad(f.Adapter+", no firmware for it seen loaded (risk: the image cannot start it at boot, unless it needs none - power off, boot, then rebuild)"))
-	case f.Adapter != "" && len(f.BTFirmware) == 0:
-		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible; no firmware seen loaded yet)\n", f.Adapter)
-	case f.Adapter != "":
-		fmt.Fprintf(&w, "  Bluetooth   %s (attestation by phone possible; firmware %s)\n", f.Adapter, strings.Join(f.BTFirmware, ", "))
-	default:
-		fmt.Fprintln(&w, "  Bluetooth   no adapter: no attestation by phone")
-	}
-	// The adapter's USB bus may let no new device in by itself
-	// (usbcore.authorized_default=0, as USBGuard sets it): then the image
-	// carries the rule that lets the adapter in.
-	if phone && f.BTAuthorize != nil {
-		fmt.Fprintf(&w, "  Adapter at boot  let in by tpm2-kira's rule in the image (USB %s, %s:%s); the bus blocks new devices\n", f.BTAuthorize.Port, f.BTAuthorize.Vendor, f.BTAuthorize.Product)
-	}
-	if line := f.imageLine(); line != "" {
-		fmt.Fprintf(&w, "  Boot image  %s\n", line)
-	}
-	if f.BootDebug {
-		fmt.Fprintf(&w, "  Debug       %s\n", warn("on at boot: the code screen and the phone check log every step, on the console too"))
-	}
-	switch {
-	case f.Status.DevicesError != "":
-		fmt.Fprintf(&w, "  LUKS        %s\n", f.Status.DevicesError)
-	case len(f.Status.Devices) == 0:
-		fmt.Fprintln(&w, "  LUKS        no encrypted device")
-	default:
-		for _, d := range f.Status.Devices {
-			if d.Error != "" {
-				fmt.Fprintf(&w, "  LUKS        %s: %s\n", d.Device, d.Error)
-				continue
-			}
-			var parts []string
-			for _, ks := range d.Keyslots {
-				parts = append(parts, strconv.Itoa(ks.Keyslot)+" "+shortKeyslot(ks))
-			}
-			for _, o := range d.Orphans {
-				parts = append(parts, fmt.Sprintf("token %d (%s) without a keyslot", o.ID, o.Type))
-			}
-			route := "not routed through tpm2-kira"
-			if f.Routed[d.Device] {
-				route = "key from tpm2-kira"
-			}
-			fmt.Fprintf(&w, "  LUKS        %s: keyslots %s; %s\n", d.Device, strings.Join(parts, ", "), route)
-		}
-		if len(f.EmptyPass) > 0 {
-			fmt.Fprintf(&w, "  Passphrase  %s\n", bad(strings.Join(f.EmptyPass, ", ")+" opens with an empty passphrase (risk: the disk is encrypted, yet anybody with it opens it - set a passphrase: cryptsetup luksChangeKey)"))
-		}
-	}
-	if len(f.PlainSwap) > 0 {
-		fmt.Fprintf(&w, "  Hibernation %s\n", bad("to unencrypted swap: "+strings.Join(f.PlainSwap, ", ")+" (risk: the memory - the disk's key included - lands on the disk in the clear, and a resume from it runs past the boot image, the SSH CA open - encrypt the swap or disable hibernation)"))
-	}
-	if f.Remote.Net.Mode != "off" {
-		fmt.Fprintf(&w, "  Boot network %s\n", strings.Join(RemoteStatusLines(f.Remote), "; "))
-	}
-	for _, s := range f.Status.Slots {
-		if s.Vault == "" {
-			continue
-		}
-		switch v := f.Vaults[s.Slot]; {
-		case v.Knows:
-			fmt.Fprintf(&w, "  Vault       %s\n", good(fmt.Sprintf("slot %d: %s answers, with the pinned key, and knows this device", s.Slot, s.Vault)))
-		default:
-			fmt.Fprintf(&w, "  Vault       %s\n", bad(fmt.Sprintf("slot %d: %s - %s (risk: the disk does not open unattended; the recovery passphrase is the way in)", s.Slot, s.Vault, v.Problem)))
-		}
-	}
-	return w.String()
-}
-
-func joinInts(ns []int) string {
-	parts := make([]string, len(ns))
-	for i, n := range ns {
-		parts[i] = strconv.Itoa(n)
-	}
-	return strings.Join(parts, ", ")
-}
 
 // recommended is the index of a dirty step - a half-gone slot comes before
 // everything, since the protections around it cannot be judged - else of
@@ -982,7 +492,7 @@ func (c *controller) show() {
 // when it is out of date - after everything is set up, as a build takes
 // its time - then what is left to do by hand is said: the route.
 func (c *controller) leave() {
-	c.leaveWith(func() machineFacts { return collectFacts(c.o.TPMPath, c.o.Debug) })
+	c.leaveWith(c.look)
 }
 
 // leaveWith is leave with look, the fresh look at the machine. The image comes
@@ -1048,611 +558,13 @@ func (c *controller) leaveWith(look func() machineFacts) {
 	}
 }
 
-// rebuildCommand is the build of the image the next boot starts.
-func rebuildCommand(initramfs string) string {
-	if initramfs == "initramfs-tools" {
-		return "update-initramfs -u"
-	}
-	return "mkinitcpio -P"
-}
-
 // The steps' actions: the expert commands' functions, with the defaults
 // the analysis settled.
-
-func (c *controller) runSetup() error {
-	if c.facts.Keys != "" {
-		k, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
-		if err != nil {
-			return err
-		}
-		if _, ok := signing.YubiKeyDescription(k); !ok {
-			// setup never replaces a signing key: a new one leaves every
-			// slot and the SSH CA to another key's approvals.
-			fmt.Fprintf(c.out, "The signing key is %s: nothing to set again. A new signing key: move %s away, then run this step - every slot is sealed again then, and the SSH CA made again.\n", c.facts.Keys, signing.DefaultKeysDir)
-			return nil
-		}
-	}
-	if c.facts.Keys == "" {
-		if err := Setup(SetupOptions{Debug: c.o.Debug}); err != nil {
-			return err
-		}
-		k, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
-		if err != nil {
-			return err
-		}
-		if _, ok := signing.YubiKeyDescription(k); !ok || !signing.YubiKeyWantsPIN(k) {
-			return nil
-		}
-	}
-	return c.storePIN()
-}
-
-// storePIN asks the YubiKey's PIN, checks it on the token and stores it
-// in control.conf for the unattended reseal.
-func (c *controller) storePIN() error {
-	key, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
-	if err != nil {
-		return err
-	}
-	return c.storePINOf(key)
-}
-
-func (c *controller) storePINOf(key crypto.Signer) error {
-	desc, _ := signing.YubiKeyDescription(key)
-	pin, err := c.ask().Password("PIN of "+desc,
-		"Checked on the token, then stored in "+signing.PINPath()+" for the approval the hooks run; readable by root alone, never in the initramfs.",
-		func(b []byte) error {
-			if len(b) == 0 {
-				return errors.New("the PIN is empty")
-			}
-			return nil
-		})
-	if err != nil {
-		return err
-	}
-	defer wipe.Bytes(pin)
-	if err := signing.VerifyYubiKeyPIN(key, pin); err != nil {
-		return err
-	}
-	if err := signing.StorePIN(signing.PINPath(), pin); err != nil {
-		return err
-	}
-	fmt.Fprintf(c.out, "%s: the PIN stored, readable by root alone\n", signing.PINPath())
-	return nil
-}
-
-// runSeal seals what lacks: slot 0 when it is not there - with a TOTP code
-// when the person chooses one, and then the fallback slot 1 - else only
-// the fallback of slot 0's code, so slot 0's TOTP key (and so its
-// authenticator entry) stays as it is. Slot 0's selection is the one the
-// analysis evaluated, put up as a recommendation: the person acknowledges
-// it, or gives custom PCRs instead (confirmPCRs).
-func (c *controller) runSeal() error {
-	algo := measure.PCRHashAlgoSHA256
-	if c.facts.UseSHA1 {
-		algo = measure.PCRHashAlgoSHA1
-	}
-	slot0, fallback := false, false
-	for _, s := range c.facts.Status.Slots {
-		slot0 = slot0 || s.Slot == 0
-		fallback = fallback || s.Fallback
-	}
-	// Each slot's QR code gets a cleared screen of its own: the second
-	// slot's output would otherwise scroll the first one's code away, and
-	// it is shown this once. Between the two the person confirms the scan;
-	// the last screen stays until "Back to the overview?" is answered.
-	if slot0 && !fallback {
-		fmt.Fprint(c.out, clearScreen)
-		return SealFallback(c.o.TPMPath, "", "", algo, c.o.Debug)
-	}
-	sel, err := c.confirmPCRs()
-	if err != nil {
-		return err
-	}
-	withTOTP, err := c.confirm("A TOTP code at boot?",
-		"The code screen shows a code to compare with your authenticator app before you type anything: it proves the boot is one your signing key approved. Without it the vault, the TPM salt or a phone check the boot, and nothing is shown.")
-	if err != nil {
-		return err
-	}
-	fmt.Fprint(c.out, clearScreen)
-	if err := Seal(c.o.TPMPath, sel, nvslot.ResolveNVRAMIndex(0), "", "", c.o.Debug, algo, true, withTOTP); err != nil {
-		return err
-	}
-	if fallback || !withTOTP {
-		return nil
-	}
-	if err := c.scanned("Slot 0"); err != nil {
-		return err
-	}
-	fmt.Fprint(c.out, clearScreen)
-	return SealFallback(c.o.TPMPath, "", "", algo, c.o.Debug)
-}
-
-// scanned holds a slot's QR code on the screen until the person says the
-// authenticator has it.
-func (c *controller) scanned(what string) error {
-	return c.ask().Wait(what+" is sealed", "Scan the QR code above with your authenticator now: it is shown this once.", "It is in my authenticator")
-}
-
-// confirmPCRs puts the evaluated selection up as the recommendation for
-// slot 0: acknowledged, it is sealed as evaluated; else the person gives
-// custom PCRs, checked for form (what a selection protects, the overview
-// judges afterwards). The fallback slot's selection is fixed by design.
-func (c *controller) confirmPCRs() (string, error) {
-	f := &c.facts
-	const custom = "custom"
-	choice, err := prompt.Select(c.ask(), "Slot 0 is sealed to these PCRs", "Evaluated for this machine: "+f.PCRsWhy+".",
-		[]prompt.Option[string]{
-			{Label: "The recommended " + f.PCRs, Value: f.PCRs},
-			{Label: "Custom PCRs", Value: custom},
-		}, f.PCRs)
-	if err != nil {
-		return "", err
-	}
-	if choice != custom {
-		return choice, nil
-	}
-	return c.ask().Input("PCRs for slot 0",
-		"Indices with a source each: none or r the register, e the event log, u the unified kernel image - such as 0e,2e,4u,7e,11u (tpm2-kira help slot).",
-		f.PCRs, func(s string) error {
-			_, err := measure.ParsePCRSpecs(s)
-			return err
-		})
-}
-
-func (c *controller) runAttest() error {
-	name, _ := os.Hostname()
-	// The machine's own TPM was judged on the overview (the Vendor line),
-	// and the phone checks it authoritatively at enrolment: no second
-	// verdict and no ask here. The phone's key is still checked.
-	if err := AttestEnrol(EnrolOptions{
-		TPMPath: c.o.TPMPath, Name: name, SHA1: c.facts.UseSHA1, Timeout: 10 * time.Minute, Debug: c.o.Debug,
-		VerifyTPM: phonegate.CheckOff, VerifyPhone: phonegate.CheckWarn,
-	}); err != nil {
-		return err
-	}
-	// Without the prepacked Bluetooth the first phone brings the gate's
-	// modules into the image: it is rebuilt when control is left, and the
-	// next boot shows "changed" once on the phone. Prepacked, the image is
-	// already whole.
-	if !c.facts.BTAlways && !c.facts.Phone {
-		fmt.Fprintln(c.out)
-		fmt.Fprintln(c.out, "The first phone brings the Bluetooth gate into the image: it is rebuilt when")
-		fmt.Fprintln(c.out, "you quit control, and the next boot shows \"changed\" once on the phone - check")
-		fmt.Fprintln(c.out, "and approve it there.")
-	}
-	return nil
-}
-
-// runLuks enrols a keyslot of the recipe - or, with one enrolled already,
-// offers its removal: the step is a toggle, a second enrolment is not.
-func (c *controller) runLuks(recipe diskkey.Recipe) error {
-	type enrolled struct {
-		device string
-		ks     KeyslotStatus
-	}
-	var have []enrolled
-	for _, d := range c.facts.Status.Devices {
-		for _, ks := range d.Keyslots {
-			if ks.Token != nil && !ks.Token.Obsolete && ks.Token.Recipe == recipe {
-				have = append(have, enrolled{d.Device, ks})
-			}
-		}
-	}
-	if len(have) > 0 {
-		i := 0
-		if len(have) > 1 {
-			var labels []string
-			for _, e := range have {
-				labels = append(labels, fmt.Sprintf("keyslot %d of %s", e.ks.Keyslot, e.device))
-			}
-			var err error
-			if i, err = c.choose("Which keyslot goes?", labels); err != nil {
-				return err
-			}
-		}
-		e := have[i]
-		ok, err := c.confirm(fmt.Sprintf("Remove keyslot %d of %s?", e.ks.Keyslot, e.device),
-			"This keyslot is enrolled already ("+recipe.Describe()+"), so picking the step offers its removal. The key opens nothing afterwards; a remaining passphrase (the recovery one) authorises it, and enrolling anew is this same step.")
-		if err != nil || !ok {
-			return errors.New("not confirmed")
-		}
-		return LuksRemove(LuksRemoveOptions{Device: e.device, Keyslot: e.ks.Keyslot, TPMPath: c.o.TPMPath})
-	}
-	dev, err := c.pickDevice()
-	if err != nil {
-		return err
-	}
-	if err := LuksEnrol(LuksEnrolOptions{
-		Device: dev, Recipe: recipe,
-		Remote: FactorEnrolOptions{TPMPath: c.o.TPMPath, Timeout: 10 * time.Minute, AdapterWait: 30 * time.Second, Yes: true, Debug: c.o.Debug},
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-// dirtyLine is a half-gone slot's line: red, recommended first, and
-// picking it removes what is left.
-func dirtyLine(d SlotContents) controlStep {
-	n := d.Slot
-	removes := "Picking the slot removes what is left of it"
-	if len(d.Foreign) > 0 {
-		removes = "Picking the slot shows the index of another shape, asks, and removes what is left of it"
-	}
-	return controlStep{Key: fmt.Sprintf("slot:%d", n), Title: fmt.Sprintf("Slot %d", n),
-		Dirty: "dirty: " + d.Remains() + " left", SelfConfirm: true,
-		Explain: "Slot " + fmt.Sprint(n) + ": " + d.Cause() + ". " + removes + "; then seal it again (slot add) and enrol its methods.",
-		Run:     func(c *controller) error { return c.runRemoveSlot(n) }}
-}
-
-// offerRebuild says why the image is out of date and what a build puts
-// in, and runs mkinitcpio -P (update-initramfs -u) when asked. It is
-// control's one rebuild, when control is left: what changes the image in
-// the steps only marks it out of date.
-func (c *controller) offerRebuild() error {
-	f := &c.facts
-	name := rebuildCommand(f.Initramfs)
-	fmt.Fprintf(c.out, "\033[1mThe boot image is out of date\033[0m\n")
-	for _, p := range f.Pending {
-		fmt.Fprintf(c.out, "  - %s\n", p)
-	}
-	fmt.Fprintf(c.out, "\n\033[1mWhat %s puts in\033[0m\n%s", name, planText(f.Plan))
-	if f.planHas(imageplan.PartPhone) {
-		fmt.Fprintln(c.out, "\n"+btImagePlan(f.Adapter))
-	}
-	fmt.Fprintln(c.out)
-	ok, err := c.confirmYes("Run "+name+" now?", "Builds the image the next boot starts; the output follows here.")
-	if err != nil || !ok {
-		fmt.Fprintf(c.out, "Not rebuilt: run %s yourself before the next boot.\n", name)
-		return nil
-	}
-	argv := strings.Fields(name)
-	rebuild := exec.Command(argv[0], argv[1:]...)
-	rebuild.Stdout, rebuild.Stderr = c.out, c.out
-	if err := rebuild.Run(); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	fmt.Fprintln(c.out)
-	fmt.Fprintln(c.out, "Reboot before enrolling a phone or a phone salt: the phone pins what the")
-	fmt.Fprintln(c.out, "next boot shows, and the boot key answers only in a boot through this image.")
-	return nil
-}
-
-// planText is the plan, a part per line: in, or out and why.
-func planText(p *BootPlan) string {
-	if p == nil {
-		return ""
-	}
-	var b strings.Builder
-	for _, pt := range p.Parts {
-		if pt.On {
-			fmt.Fprintf(&b, "  %s %-18s %s\n", good("✓"), pt.Title(), pt.Why)
-		} else {
-			fmt.Fprintf(&b, "  %s %-18s %s\n", "\033[0;90m-\033[0m", pt.Title(), "\033[0;90mout: "+pt.Why+"\033[0m")
-		}
-	}
-	return b.String()
-}
-
-// planHas says whether the plan has the part in; false without a plan.
-func (f *machineFacts) planHas(name string) bool {
-	return f.Plan != nil && f.Plan.Has(name)
-}
-
-// imageLine is the status' line on the boot image: what it carries, or
-// why it is rebuilt when control is left.
-func (f *machineFacts) imageLine() string {
-	if f.Plan == nil || f.Initramfs == "" || f.HookState != "" {
-		return ""
-	}
-	var in []string
-	for _, pt := range f.Plan.Parts {
-		if pt.On {
-			in = append(in, pt.Title())
-		}
-	}
-	line := "carries " + strings.Join(in, ", ")
-	if len(f.Unused) > 0 {
-		line += "; the next build leaves out " + strings.Join(f.Unused, ", ") + ", which nothing uses any more"
-	}
-	switch {
-	case len(f.Pending) > 0:
-		return warn("rebuilt when you quit control: " + strings.Join(f.Pending, "; "))
-	case f.ImageErr != "":
-		return bad("its plan cannot be read (" + f.ImageErr + ")")
-	}
-	return good(line)
-}
-
-// confirmYes is confirm with Yes what Enter alone gives: a proposal to turn down.
-func (c *controller) confirmYes(title, description string) (bool, error) {
-	return c.ask().Confirm(title, description, true)
-}
-
-// runRemoveSlot is control's one way to delete a slot, whole: the slot's
-// own line in the tree runs it. What a failed part leaves behind shows as
-// dirty on the overview until a run removes it.
-func (c *controller) runRemoveSlot(slot int) error {
-	f := &c.facts
-	label := ""
-	for _, s := range f.Status.Slots {
-		if s.Slot != slot {
-			continue
-		}
-		label = "sealed to " + s.PCRs
-		if s.Fallback {
-			label += " (the fallback)"
-		}
-		if s.Phones > 0 {
-			label += ", " + phonesText(s.Phones)
-		}
-		if s.PhoneSalt {
-			label += ", phone salt"
-		}
-		for _, d := range f.Status.Devices {
-			for _, ks := range d.Keyslots {
-				if ks.Token != nil && ks.Token.BoundTo(s.Slot) {
-					label += fmt.Sprintf(", keyslot %d of %s", ks.Keyslot, d.Device)
-				}
-			}
-		}
-	}
-	for _, d := range f.Dirt {
-		if d.Slot == slot {
-			label = "dirty: " + d.Remains() + " left"
-		}
-	}
-	ok, err := c.confirm(fmt.Sprintf("Delete slot %d whole?", slot),
-		"Gone for good: "+label+". The authenticator's code for it stops matching. Removing a LUKS keyslot asks for a remaining passphrase (the recovery one); keyslots that are not tpm2-kira's stay.")
-	if err != nil || !ok {
-		return errors.New("not confirmed")
-	}
-	return DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out,
-		Foreign: foreignAsk(c.out, c.confirm)})
-}
-
-// channelStep is the red line of a slot whose phone channel is sealed to another
-// PCR 7 than the next boot's: picking it shows old, new and what moved it, and asks.
-func channelStep(slot int) controlStep {
-	return controlStep{Key: fmt.Sprintf("channel:%d", slot), Title: fmt.Sprintf("Slot %d's phone channel", slot), SelfConfirm: true,
-		Dirty:   fmt.Sprintf("sealed to another PCR %s than the next boot's (risk: no gate, the phones find no machine at the next boot; no hook follows it): pick it to look at what moved it and seal it again", nvslot.ChannelPCRList()),
-		Explain: "The phones find no machine until the channel is sealed to the next boot's PCR " + nvslot.ChannelPCRList() + ". Look at what moved it first: a db or dbx update is yours; anything you did not do means this boot is not yours, and sealing hands the channel over to it.",
-		Run:     func(c *controller) error { return c.runSealChannel(slot) }}
-}
-
-// runSealChannel shows the move, asks, and approves the slot with its channel. The
-// move is printed, not the question's description: every form of the question shows it.
-func (c *controller) runSealChannel(slot int) error {
-	idx := nvslot.ResolveNVRAMIndex(uint32(slot))
-	if err := c.showChannelMove(idx); err != nil {
-		return err
-	}
-	ok, err := c.confirm(fmt.Sprintf("Seal slot %d's phone channel to the next boot's PCR %s?", slot, nvslot.ChannelPCRList()),
-		"The values above are the ones it follows. No leaves it: the phones find no machine.")
-	if err != nil || !ok {
-		return errors.New("not sealed: the phones find no machine at the next boot")
-	}
-	return Reseal(c.o.TPMPath, "", idx, "", "", ChannelSeal, c.o.Debug)
-}
-
-// showChannelMove prints old, new and what moved it.
-func (c *controller) showChannelMove(idx uint32) error {
-	tpmDev, err := tpmdev.Open(c.o.TPMPath)
-	if err != nil {
-		return err
-	}
-	defer tpmDev.Close()
-	raw, err := nvslot.ReadRecord(idx)
-	if err != nil {
-		return err
-	}
-	sb, err := nvslot.UnmarshalSealedBlob(raw)
-	if err != nil {
-		return err
-	}
-	move, err := nvslot.ChannelMoves(tpmDev, sb)
-	if err != nil {
-		return err
-	}
-	if move == nil {
-		return errors.New("the channel has not moved any more")
-	}
-	printChannelMoveTo(c.out, move)
-	return nil
-}
 
 func isTerminal(f *os.File) bool {
 	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
 	return err == nil
 }
 
-// btImagePlan says what the sd-tpm2-kira hook puts into the image for the
-// adapter - the same resolution it runs (attest_initramfs.go) - so it can
-// be seen before the rebuild, and checked after it.
-func btImagePlan(adapter string) string {
-	var n int
-	if _, err := fmt.Sscanf(adapter, "hci%d", &n); err != nil {
-		return ""
-	}
-	deps, err := ResolveBTDeps("/sys", DefaultFirmwareDir, n, append(readKernelLog(""), journalBluetoothLines()...))
-	if err != nil {
-		return "The sd-tpm2-kira hook adds Bluetooth for " + adapter + ": " + err.Error()
-	}
-	rememberedFirmware(deps, DefaultFirmwareDir)
-	var b strings.Builder
-	fmt.Fprintf(&b, "The sd-tpm2-kira hook adds for %s (no edit of mkinitcpio.conf):\n", adapter)
-	fmt.Fprintf(&b, "  modules:   %s (with their dependencies)\n", strings.Join(deps.Modules, " "))
-	if len(deps.Firmware) > 0 {
-		fmt.Fprintf(&b, "  firmware:  %s\n", strings.Join(deps.Firmware, " "))
-	} else {
-		fmt.Fprintf(&b, "  firmware:  none known - only what the modules declare\n")
-	}
-	fmt.Fprintf(&b, "  and:       /%s, the signing public key", btModulesLoadConf)
-	if deps.Authorize != nil {
-		fmt.Fprintf(&b, "\n  and:       /%s, as the adapter's USB bus lets no new device in by itself:\n             %s", BTUdevRuleFile, deps.Authorize.UdevRule())
-	}
-	for _, w := range deps.Warnings {
-		fmt.Fprintf(&b, "\n  NOTE: %s", w)
-	}
-	return b.String()
-}
-
-// imageHints is step 2's hint about the boot image: when it is current
-// and this boot did not go through it, reboot - picking it does. An image
-// out of date is rebuilt when control is left.
-func (c *controller) imageHints() []controlStep {
-	f := &c.facts
-	if f.Initramfs == "" || !chainDone(f) || len(f.Pending) > 0 {
-		return nil
-	}
-	if len(f.Status.Slots) == 0 || (f.Closed && f.NewImage == "") {
-		return nil
-	}
-	why := "the boot image is ready, and this boot did not go through it"
-	if f.NewImage != "" {
-		why = f.NewImage
-	}
-	explain := "The device is ready to be rebooted: " + why + ". At the boot, compare the code on the screen with your authenticator, press Enter and type your passphrase."
-	if f.Remote.SSH.On {
-		explain += " With SSH at boot, the console says where to log in to do that remotely."
-	}
-	if !f.Phone {
-		explain += " The phone and the disk keys that need it are enrolled afterwards, in a boot through the image."
-	}
-	return []controlStep{{Key: "reboot", Title: "Ready to reboot", Optional: true, SelfConfirm: true,
-		Explain: explain + " Picking this reboots now, after a confirmation.",
-		Run: func(c *controller) error {
-			ok, err := c.confirm("Reboot now?", "Unsaved work in other programs is lost.")
-			if err != nil || !ok {
-				return errors.New("not rebooted")
-			}
-			return rebootNow()
-		}}}
-}
-
 // rebootNow asks systemd to reboot; a var for the tests.
 var rebootNow = func() error { return exec.Command("systemctl", "reboot").Run() }
-
-// pendingRebuild lists the files of the boot chain a boot image is built
-// from that changed after the image the next boot starts was built: the
-// HOOKS, the command line, crypttab. What the image carries for the
-// protections is told by its plan (imageState).
-func pendingRebuild(initramfs string) []string {
-	var inputs []string
-	switch initramfs {
-	case "mkinitcpio":
-		inputs = append([]string{mkinitcpioConf, "/etc/kernel/cmdline", "/etc/crypttab.initramfs"}, globs("/etc/mkinitcpio.conf.d/*.conf", "/etc/cmdline.d/*.conf")...)
-	case "initramfs-tools":
-		inputs = append([]string{"/etc/crypttab", "/etc/initramfs-tools/initramfs.conf", "/etc/initramfs-tools/modules"}, globs("/etc/initramfs-tools/conf.d/*")...)
-	default:
-		return nil
-	}
-	var out []string
-	for _, img := range bootImages() {
-		ist, err := os.Stat(img)
-		if err != nil {
-			continue
-		}
-		for _, in := range inputs {
-			if st, err := os.Stat(in); err == nil && st.ModTime().After(ist.ModTime()) {
-				out = append(out, fmt.Sprintf("%s changed after %s was built", in, filepath.Base(img)))
-			}
-		}
-	}
-	return out
-}
-
-// imageState compares the image the next boot starts with the plan: the
-// reasons to rebuild (the boot chain's files, the parts in use and not in
-// it), the parts it carries for nothing, and why its plan cannot be read.
-func imageState(initramfs string, plan *BootPlan) (pending, unused []string, problem string) {
-	if initramfs == "" {
-		return nil, nil, ""
-	}
-	pending = pendingRebuild(initramfs)
-	for _, img := range bootImages() {
-		parts, err := imagePlan(img)
-		switch {
-		case os.IsNotExist(err):
-			pending = append(pending, filepath.Base(img)+" is not built yet")
-			continue
-		case err != nil:
-			problem = err.Error()
-			continue
-		}
-		pending = append(pending, planPending(plan, parts, img)...)
-		unused = append(unused, planUnused(plan, parts)...)
-	}
-	return pending, unused, problem
-}
-
-func globs(patterns ...string) []string {
-	var out []string
-	for _, p := range patterns {
-		m, _ := filepath.Glob(p)
-		out = append(out, m...)
-	}
-	return out
-}
-
-// runBootDebug switches the boot settings' debug on or off.
-func (c *controller) runBootDebug() error {
-	on := !c.facts.BootDebug
-	title := "Switch debug at boot on?"
-	if !on {
-		title = "Switch debug at boot off?"
-	}
-	ok, err := c.confirm(title, "Takes effect at the next boot; nothing is rebuilt.")
-	if err != nil || !ok {
-		return errors.New("not switched")
-	}
-	signer, err := signing.LoadCheckedSigningPrivateKey(signing.DefaultPrivateKeyPath)
-	if err != nil {
-		return err
-	}
-	if err := signing.PrepareSigningKey(signer); err != nil {
-		return err
-	}
-	tpmDev, err := tpmdev.Open(c.o.TPMPath)
-	if err != nil {
-		return err
-	}
-	defer tpmDev.Close()
-	if err := nvslot.WriteBootSettings(tpmDev, nvslot.BootSettings{Debug: on}, signer); err != nil {
-		return err
-	}
-	c.facts.BootDebug = on
-	if on {
-		fmt.Fprintln(c.out, "Debug at boot is on: from the next boot the code screen and the phone check log every step, on the console too.")
-	} else {
-		fmt.Fprintln(c.out, "Debug at boot is off.")
-	}
-	return nil
-}
-
-// controlConfigProblemsText says everything that keeps control.conf from
-// loading - each line, its number and what to do - or "" when it loads
-// (or is not there: the defaults). No line is quoted: a PIN line left
-// over from before the PIN file held a secret.
-func controlConfigProblemsText(path string) string {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return ""
-	}
-	if err != nil {
-		return fmt.Sprintf("%s cannot be read: %v\n", path, err)
-	}
-	problems := ControlConfigProblems(data)
-	if len(problems) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "\033[0;31m%s does not load\033[0m - control stops before anything is asked or written:\n\n", path)
-	for _, p := range problems {
-		fmt.Fprintf(&b, "  - %s\n", strings.TrimPrefix(p.Error(), "control.conf "))
-	}
-	fmt.Fprintf(&b, "\nEdit the file: remove or correct the lines above; every other line stays as\n"+
-		"it is. Then start 'tpm2-kira control' again.\n\n")
-	return b.String()
-}

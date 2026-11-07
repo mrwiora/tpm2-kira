@@ -57,7 +57,7 @@ Four levels, from seconds to a whole boot:
 |---|---|---|
 | unit | Go | the logic: blobs, policies, recipes, the board, the parsers |
 | integration | Go, swtpm, socat | the binaries against a software TPM: sealing, codes, run, the unlock socket, SSH |
-| the VM test (`tools/vmtest.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault, hibernation |
+| the VM test (`tools/vmtest.py`, its helpers in `tools/vmtestlib.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault, hibernation |
 | the phone against a VM (`tools/phone-vm-test.py`) | the VMs, the Android SDK's emulator, KVM | Marify's real BLE code and session against the real gate: enrolment, a phone salt's hand-over, boots attested in the initrd, the pepper typed through the phone's layout |
 | the acceptance run (`tools/acceptance.py`) | a machine you watch | the same install checks, with you at the console for the reboot |
 
@@ -221,6 +221,16 @@ result.
 A scenario that fails does not end the others: the machine goes back to the setup, booted, and the
 next goes on from there; one that needs it is not run. Only a machine that does not come back ends
 the run.
+
+### The screens of a run
+
+Each scenario keeps what was on the screens in `screens/NN-scenario/` of the machine's run
+directory: the console as it came from the serial port (`console.ansi`), every session's
+transcript (`session-*.log`: control and the other commands; `boot-*.log`: the code screen over
+SSH), and with a phone (`--phone`, `tools/phone-vm-test.py`) a screenshot of each new screen the app
+showed (`phone-*.png`; the one-time keyboard is kept out of screenshots by the app and comes out
+black). `tools/screens.py RUN_DIR` draws the texts as terminal pictures (SVG) and writes
+`screens.html` with every picture by machine and scenario. Nothing in it is checked.
 
 ### Iterating from a saved setup
 

@@ -94,6 +94,7 @@ func (c *controller) runNetwork() error {
 		// The first time: what the running system does, as the proposal.
 		sug, from := SuggestNetwork()
 		fmt.Fprintf(c.out, "Proposed from the running system (%s): %s\n", from, sug.Describe())
+		sug.DHCPID, sug.Announce = r.Net.DHCPID, r.Net.Announce
 		r.Net = sug
 	}
 	mode, err := prompt.Select(c.ask(), "Network in the boot image",
@@ -170,6 +171,13 @@ func (c *controller) runNetwork() error {
 	} else {
 		r.Net.Addresses, r.Net.Gateways = nil, nil
 	}
+	announce, err := prompt.Select(c.ask(), "Announce the address at boot",
+		"Once the boot has its address, it tells the link (a gratuitous ARP, an IPv6 neighbour advertisement) and pings the gateway,\nso that a switch or a host holding an old entry for the address reaches this machine.",
+		[]prompt.Option[bool]{{Label: "On (recommended)", Value: true}, {Label: "Off", Value: false}}, r.Net.Announce)
+	if err != nil {
+		return err
+	}
+	r.Net.Announce = announce
 	return c.writeRemote(r)
 }
 
@@ -244,8 +252,9 @@ func (c *controller) offerRemoveSSHCA(path string) error {
 	if !sshCAThere(path) {
 		return nil
 	}
-	ok, err := c.confirm("Remove the SSH CA too?",
-		"The SSH server is off. Kept, the CA "+path+" serves again when SSH is switched on, and the clients' known_hosts line stays good. Removed (the EFI variable and "+sshCAPub(path)+"), a CA made later is a new one that every client must trust again.")
+	fmt.Fprintln(c.out, "The SSH server is off. Kept, the CA "+path+" serves again when SSH is switched on, and the clients' known_hosts line stays good.")
+	ok, err := c.confirmDestroy("Remove the SSH CA too?",
+		"the SSH CA (the EFI variable and "+sshCAPub(path)+"): a CA made later is a new one that every client must trust again", "delete")
 	if err != nil || !ok {
 		return err
 	}

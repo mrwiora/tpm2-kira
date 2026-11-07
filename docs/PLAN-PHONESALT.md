@@ -130,7 +130,14 @@ at unlock, in the initrd:
     wipe F
 
 factor(F, label) := hex( HKDF-SHA256(ikm = F, salt = "",
-                         info = "tpm2-kira/factor/v1" ‖ lp(label), len = 32) )
+                         info = "tpm2-kira/factor/v1" ‖ u16be(len(label)) ‖ label, len = 32) )
+```
+
+The length of the label is two bytes big-endian, not the protocol's `lp` (four bytes
+little-endian): that is what the code has derived since the first enrolment, and
+what every keyslot of it holds. The normative text is DISK-KEY.md, "The derivations".
+
+```
 ```
 
 - `F` is 32 bytes, so it fits `TPM2_MakeCredential` directly. The AES-GCM layer

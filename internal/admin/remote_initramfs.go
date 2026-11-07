@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tpm2-trust/assh/config"
+	"github.com/tpm2-trust/tpm2-kira/internal/netstate"
 )
 
 // The image's files for the network and the SSH server (control.conf's
@@ -22,10 +23,11 @@ import (
 const (
 	imageNetworkFile = "/etc/systemd/network/10-tpm2-kira.network"
 	imageRunDropIn   = "/etc/systemd/system/tpm2-kira.service.d/remote.conf"
-	// imageRemoteConf is initramfs-tools' in place of the two above: read
-	// by the init-premount script, which brings the network up and starts
-	// 'run' with TPM2_KIRA_REMOTE.
-	imageRemoteConf = "/etc/tpm2-kira/remote.conf"
+	// imageRemoteConf is the network's settings in every image: run reads
+	// what it shows and announces (netstate.ImageConf); initramfs-tools'
+	// init-premount script, in place of the two above, brings the network
+	// up from it and starts 'run' with TPM2_KIRA_REMOTE.
+	imageRemoteConf = netstate.ImageConf
 	// imageResumeDropIn closes the boot (PCR 15: the slots and the SSH CA)
 	// right before a resume from hibernation (resumeDropIn); initramfs-tools'
 	// is the package's local-top script tpm2-kira-close, which reads the plan.
@@ -88,7 +90,7 @@ Environment="TPM2_KIRA_REMOTE=--ssh --ssh-hold=%d"
 func remoteConf(r RemoteConfig, id dhcpIdentity) string {
 	var b strings.Builder
 	b.WriteString("# Written by 'tpm2-kira initramfs plan' from /etc/tpm2-kira/control.conf,\n")
-	b.WriteString("# for the boot image alone; read by scripts/init-premount/tpm2-kira.\n")
+	b.WriteString("# for the boot image alone; read by run and scripts/init-premount/tpm2-kira.\n")
 	for _, kv := range [][2]string{
 		{"TPM2_KIRA_NET", r.Net.Mode},
 		{"TPM2_KIRA_NET_MATCH", r.Net.Match},
@@ -98,6 +100,7 @@ func remoteConf(r RemoteConfig, id dhcpIdentity) string {
 		// The DHCP client identifier, hex: udhcpc asks with it; without
 		// one, klibc's ipconfig asks with none.
 		{"TPM2_KIRA_NET_CLIENTID", hex.EncodeToString(id.ID)},
+		{"TPM2_KIRA_NET_ANNOUNCE", map[bool]string{true: "on", false: "off"}[r.Net.Announce]},
 	} {
 		fmt.Fprintf(&b, "%s=\"%s\"\n", kv[0], kv[1])
 	}

@@ -26,16 +26,15 @@ import (
 // Default is "dev" for development builds
 var Version = "dev"
 
-// fail reports a command failure and exits 0 on purpose: tpm2-kira is meant to
-// be chainable (`tpm2-kira && cryptsetup ...`), so a TPM or read failure must
-// not stop the commands after it. Scripts must therefore detect failure from
-// the output, not the exit status — grep for the FAILED marker below. A bad --pin-fd is
-// the exception (parseSigning), as are the attest commands (failAttest).
+// fail reports a command failure: the FAILED marker and exit status 1. What
+// must never break the boot chain on it - the initramfs hooks, the kernel's
+// postinst, systemd-boot's update - says so where it calls (|| rc=$?, a "-"
+// in the unit) and passes the words on. The attest commands have their own
+// statuses (failAttest), a bad --pin-fd 2 (parseSigning).
 func fail(err error) {
 	signing.CloseTokenSessions()
 	fmt.Fprintf(os.Stderr, "tpm2-kira: FAILED: %v\n", err)
-	fmt.Fprintln(os.Stderr, "tpm2-kira: (exit status is 0 by design; this command did NOT succeed)")
-	os.Exit(0)
+	os.Exit(1)
 }
 
 // parseSigning parses the flags of a command that may sign, and --pin-fd with them:
@@ -184,8 +183,9 @@ func main() {
 		fs := flag.NewFlagSet("control", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
+		lines := fs.Bool("lines", false, "The numbered line menus instead of the full screen")
 		parseSigning(fs, commandArgs)
-		if err := admin.Control(admin.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
+		if err := admin.Control(admin.ControlOptions{TPMPath: *tpm, Debug: *dbg, Lines: *lines, HelpTopics: helpTopics()}); err != nil {
 			fail(err)
 		}
 	case "status":

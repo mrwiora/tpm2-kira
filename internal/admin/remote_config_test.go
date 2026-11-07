@@ -30,13 +30,19 @@ TPM2_KIRA_NET_DHCP_ID=mac
 		r.SSH.Assh.AuthorizedKeys != DefaultSSHAuthorizedKeys || r.SSH.Assh.CA != DefaultSSHCA || r.Net.DHCPID != "mac" || r.Problem() != "" {
 		t.Fatalf("%+v %q", r, r.Problem())
 	}
-	if d := DefaultControlConfig().Remote; d.Net.Mode != "off" || d.SSH.On || d.SSH.Port() != 22 || d.Net.DHCPID != "auto" || d.SSH.Assh.KeyID != "tpm2-kira boot" {
+	if !r.Net.Announce {
+		t.Fatal("TPM2_KIRA_NET_ANNOUNCE is on unless it says off")
+	}
+	if c, err := ParseControlConfig([]byte("TPM2_KIRA_NET=dhcp\nTPM2_KIRA_NET_ANNOUNCE=off\n")); err != nil || c.Remote.Net.Announce {
+		t.Fatalf("announce off: %+v %v", c.Remote.Net, err)
+	}
+	if d := DefaultControlConfig().Remote; !d.Net.Announce || d.Net.Mode != "off" || d.SSH.On || d.SSH.Port() != 22 || d.Net.DHCPID != "auto" || d.SSH.Assh.KeyID != "tpm2-kira boot" {
 		t.Fatalf("defaults: %+v", d)
 	}
 	for _, bad := range []string{
 		"TPM2_KIRA_NET=wifi", "TPM2_KIRA_NET_MATCH=eth 0", "TPM2_KIRA_NET_ADDRESS=192.0.2.10",
 		"TPM2_KIRA_NET_GATEWAY=gw", "TPM2_KIRA_NET_DNS=1.1.1.1 dns", "TPM2_KIRA_SSH=yes",
-		"TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_NET_DHCP_ID=zz",
+		"TPM2_KIRA_SSH_HOLD=-1", "TPM2_KIRA_NET_DHCP_ID=zz", "TPM2_KIRA_NET_ANNOUNCE=yes",
 	} {
 		if _, err := ParseControlConfig([]byte("# x\n" + bad + "\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
 			t.Errorf("%s: %v", bad, err)
@@ -94,7 +100,7 @@ func TestSetRemoteConfig(t *testing.T) {
 	os.WriteFile(path, []byte("TPM2_KIRA_ATTEST_BLUETOOTH=always\n"), 0o644)
 	r := DefaultRemoteConfig()
 	r.SSH.Assh = sshConfDefaults(config.Default(), path)
-	r.Net = NetConfig{Mode: "static", Match: "aa:bb:cc:dd:ee:ff", Addresses: []string{"192.0.2.10/24", "2001:db8::10/64"}, DNS: []string{"9.9.9.9"}}
+	r.Net = NetConfig{Mode: "static", Match: "aa:bb:cc:dd:ee:ff", Addresses: []string{"192.0.2.10/24", "2001:db8::10/64"}, DNS: []string{"9.9.9.9"}, Announce: false}
 	r.SSH.On, r.SSH.Assh.Listen = true, ":2222"
 	if err := setRemoteConfig(path, r); err != nil {
 		t.Fatal(err)
@@ -104,7 +110,7 @@ func TestSetRemoteConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Attest.Bluetooth != "always" || cfg.Remote.Net.Mode != "static" || len(cfg.Remote.Net.Addresses) != 2 ||
-		cfg.Remote.Net.Match != r.Net.Match || !cfg.Remote.SSH.On || cfg.Remote.SSH.Port() != 2222 || len(cfg.Remote.Net.Gateways) != 0 {
+		cfg.Remote.Net.Match != r.Net.Match || !cfg.Remote.SSH.On || cfg.Remote.SSH.Port() != 2222 || len(cfg.Remote.Net.Gateways) != 0 || cfg.Remote.Net.Announce {
 		t.Fatalf("read back: %+v", cfg)
 	}
 	if b, _ := os.ReadFile(sshConfPath(path)); !strings.Contains(string(b), "ASSH_LISTEN=:2222\n") || !strings.HasPrefix(string(b), "# aSSH's settings") {

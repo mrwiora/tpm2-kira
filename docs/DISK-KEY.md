@@ -344,6 +344,28 @@ another keymap than the keyboard (US against German: `y` and `z`) those keys are
 for a password. The password is still typed in the clear, and a machine compromised while attested
 sees keys and layout together. `docs/SECURITY-BACKGROUND.md` §13.5b.
 
+## The derivations
+
+What a keyslot's key is made of, to the byte: the normative text, which the code
+follows and a known answer pins (a test against fixed bytes each). Every enrolled
+keyslot holds what these make; a change of one is a change of those disks' keys, and
+needs a "what breaks" and the owner's word. Each row was also checked against an
+implementation of its text alone (2026-11-07).
+
+| What | Derivation | Known answer |
+|---|---|---|
+| the key of every recipe | `Combine(password, salt)` = base64 without padding of Argon2id(password, salt, 16 passes, 1 GiB, 4 lanes, 64 bytes), followed by `\n` (the newline is part of the key) | `TestCombineKnownAnswer` |
+| the phone's salt (`0x1300`, `0x1302`), the TPM's (`0x1200`, of its part T) | `hex(HKDF-SHA256(ikm = F, salt = "", info = "tpm2-kira/factor/v1" ‖ u16be(len(label)) ‖ label, 32))`, label default `luks` | `TestFactorSaltKnownAnswer` |
+| the vault's salt (`0x14xx`, `0x24xx`) | `hex(HKDF-SHA256(ikm = R, salt = pepper or "", info = "tpm2-kira/vault/salt/v1" ‖ u16be(len(label)) ‖ label, 32))` | `TestVaultDerivationsKnownAnswer` |
+| the unattended password (`0x24xx`) | `hex(HKDF-SHA256(ikm = L, salt = "", info = "tpm2-kira/vault/password/v1" ‖ u16be(len(label)) ‖ label, 32))` | the same |
+| the pepper's check in the slot (`0x2401`) | the first 16 bytes of `HMAC-SHA256(key, "tpm2-kira/vault/pepper-check/v1")` | the same |
+| a pepper typed through the keyboard (`0x1302`, `0x1402`) | the salt is `HMAC-SHA256(device salt, "tpm2-kira/keyboard-pepper/v1" ‖ pepper)`, 32 bytes as they are | `TestKeyboardSaltKnownAnswer` |
+| the keyboard's layout | start from `abcdefghijklmnopqrstuvwxyz0123456789`; for i = 35 down to 1, take the next byte b with `b < 256 - 256 mod (i+1)` from the stream `HMAC-SHA256(seed, "tpm2-kira/keyboard-layout/v1" ‖ u32be(n))`, n = 0, 1, ..., and swap places i and `b mod (i+1)`; place k then shows what key k types | `TestKeyboardLayoutKnownAnswer` (phone, vault and machine must agree) |
+
+Two length prefixes are in use: these derivations' `u16be(len) ‖ x`, kept as they are,
+and the protocol's `lp(x) = u32le(len(x)) ‖ x` (PROTOCOL-BLE.md) for what is signed.
+A new derivation takes `lp`.
+
 ## The route: where the initrd takes the key from
 
 ### Arch (systemd in the initrd)

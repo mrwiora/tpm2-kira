@@ -71,6 +71,18 @@ If no firmware line appears: power the machine off (a cold start loads the
 firmware and logs it), boot, and rebuild with `mkinitcpio -P`. More in
 [DEBUG-BLE.md](DEBUG-BLE.md).
 
+**"Failed to start Early TPM SRK Setup" on the console (Arch, systemd 262):**
+systemd's own `systemd-tpm2-setup-early.service`, in the initrd, not tpm2-kira's: it
+finds the SRK and saves its public key, then fails to initialize systemd's NvPCRs
+(`/usr/lib/nvpcr/*.nvpcr`: "Failed to initialize NvPCR index: No such file or
+directory") and exits 1. The same happens without tpm2-kira installed (a fresh VM,
+2026-11-07); `systemd-tpm2-setup.service` in the booted system then finishes. Nothing of
+tpm2-kira's uses the SRK or the NvPCRs (its slots are NV indices 0x01803000 and up, its
+objects under its own storage primary), and the boot unlocks all the same.
+```bash
+journalctl -b -u systemd-tpm2-setup-early.service -u systemd-tpm2-setup.service -o cat
+```
+
 **Debug output** (the codes themselves are only on the boot's code screen; with
 "Debug at boot" in `control` the boot's log says every step):
 ```bash
@@ -112,28 +124,18 @@ reconstruction rules and constants.
 
 ## Exit status
 
-**A failed command exits 0.** This is deliberate: tpm2-kira is meant to be
-chainable in a boot sequence, so a TPM or NVRAM problem must not stop the
-commands after it.
-
-```bash
-tpm2-kira && cryptsetup open /dev/nvme0n1p2 cryptroot
-```
-
-Scripts must therefore judge success from the **output**, not the exit status.
-Failures are printed to stderr with a fixed marker:
+**A failed command exits 1**, with the reason on stderr after a fixed marker:
 
 ```
 tpm2-kira: FAILED: <reason>
-tpm2-kira: (exit status is 0 by design; this command did NOT succeed)
 ```
 
-The mkinitcpio post hook does exactly this — it greps the output for the success
-line rather than testing `$?`.
+What must never break a build or an update on it says so where it calls: the
+initramfs hooks and the kernel's postinst keep going (`|| rc=$?`) and pass the
+words on, and the systemd-boot drop-in's `ExecStartPost=-` ignores the status.
 
-**Exception: the attestation commands.** `phone gate`, `phone verify`,
-`phone quote` and `phone enrol` gate or judge something, and a gate that
-exits 0 on failure is not a gate. They exit non-zero on failure: `1` internal
+**The attestation commands** (`phone gate`, `phone verify`, `phone quote`,
+`phone enrol`) say more by their status: `1` internal
 error, `2` usage, `3` no phone or no adapter, `4` the phone rejected this boot
 (do not type a passphrase before checking further), `5` the receipt was not
 signed by the enrolled phone.
@@ -142,8 +144,8 @@ signed by the enrolled phone.
 gives no PIN (not open, empty, a line too long, of the wrong type, a regular file
 others can read) exits `2`: the script asked for that source, so nothing else is
 tried and a chain must not go on as if it had worked. A wrong PIN on a good
-descriptor is the token's refusal, as from any source: exit `0` and `FAILED` or
-`SKIPPED`, unless the command gates something.
+descriptor is the token's refusal, as from any source: `FAILED` and exit `1`, or
+`SKIPPED` and exit `0` (slot approve, where a skip leaves every slot as it is).
 
 **The other non-zero exits:** `1` when a command runs as a user (root is
 needed), `2` for a missing or unknown subcommand, and `1` from the three

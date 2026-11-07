@@ -114,6 +114,16 @@ ssh-child | gate-child; docs/ and README.md
 
 // printHelp prints a command's page, or the overview after a note when
 // there is none.
+// helpTopics are the help pages' names, sorted: control's Reference.
+func helpTopics() []string {
+	names := make([]string, 0, len(helpPages))
+	for n := range helpPages {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func printHelp(topic string) {
 	topic = strings.TrimPrefix(topic, "--")
 	if page, ok := helpPages[topic]; ok {
@@ -132,62 +142,48 @@ func printHelp(topic string) {
 // helpPages are the pages of 'tpm2-kira help <command>'. A command with
 // subcommands has one page; the subcommands are on it.
 var helpPages = map[string]string{
-	"control": `tpm2-kira control [--tpm PATH] [--pin-fd N]
+	"control": `tpm2-kira control [--tpm PATH] [--pin-fd N] [--lines]
 
-The guided way through the protections, in two steps.
+The guided way through the protections, on one screen (docs/CONTROL.md).
 
-Step 1, the boot chain, is the first screen until it is in place. On
-top the prerequisites, each a line - met (green), not met (red, with
-what to do or the risk), or information: a usable TPM (information:
-the disk unlock works without one), the initramfs
-system, tpm2-kira's hook files installed, systemd and sd-encrypt in
-mkinitcpio's HOOKS, the LUKS devices, a recovery passphrase (a keyslot
-that is not tpm2-kira's) on each, no keyslot opening with an empty
-passphrase (red: anybody with the disk opens it), Secure Boot. Under it
-the steps:
+On a terminal that says its size, control takes the whole screen and
+gives it back as it was when it is left. On the left the sections:
 
-  mkinitcpio adoption        sd-tpm2-kira into HOOKS, written when you say so
-  Kernel command line        the key's route: rd.luks.key= names the socket
-    adoption                 (crypttab on Debian), written when you say so
-  Continue to step 2         once both are in place
+  Overview        the machine's status, judged line by line (green good,
+                  red not good with the risk in brackets, orange a
+                  warning), and a line per section
+  Boot chain      the prerequisites, the sd-tpm2-kira hook in HOOKS, the
+                  key's route, the PCR key in uki.conf - each line shown
+                  as it should read and written when you say so; the
+                  other sections open once it is in place
+  Keys & slots    the signing key (a YubiKey's PIN stored), slot 0 and the
+                  fallback slot 1, another slot to PCRs you choose,
+                  approve now, every slot a line that deletes it, delete
+                  everything
+  Phone           enrol a phone, Bluetooth in every image, remove phones
+  Disk unlock     the keyslots by recipe - enrolled, picking one offers
+                  its removal - and the phone salt's removal
+  Network & SSH   the image's network, its address announced, the SSH
+                  server with the code screen
+  Boot image      what is out of date and why, build it now, debug at boot
+  Tools           the read-only commands, run as they are
+  Reference       every help page
 
-Step 2 is what the machine combines, in submenus; on top the machine's
-status, judged line by line (green good, red not good with the risk in
-brackets: the SHA-1 bank, Secure Boot disabled or in Setup Mode, a slot
-sealed without the kernel measured, an endorsement key no known vendor
-vouches for, a loose file holding the PIN, an empty passphrase, a vault
-that does not answer):
+On the right the section's steps - done, open, not possible here (the
+reason beside it), needing attention - and the selected step's detail:
+what it does, what it destroys, and the command it equals. Up and down
+move, right and left go into a section and out, Enter runs, / searches
+every step, r looks again, ? the keys, q leaves. A step runs in the
+terminal below the screen, asks what it needs, and the screen comes back.
+A step that destroys (a slot, a keyslot, phones, the phone salt, the
+vault, the SSH CA, everything) asks for the slot's or keyslot's number,
+or "delete", to be typed; anything else keeps it. The facts come in the
+background: the slow ones (each vault asked, each passphrase tried
+empty) say "checking" until they are done.
 
-  Signing key and TOTP codes setup (and the YubiKey's PIN, stored); the
-                             standard sealing, slot 0 to the evaluated PCRs
-                             (or custom ones) and slot 1 the fallback; every
-                             slot a line, picking it deletes the slot whole
-  Attestation by phone       phone enrol; Bluetooth in every boot image
-  Disk unlock                password + salt; password + phone salt (the
-                             phone); this TPM + a vault - each a keyslot,
-                             enrolled it offers the removal
-  Network and SSH at boot    the image's network (DHCP or static), the SSH
-                             server with the code screen
-  Debug at boot              the switch in the TPM
+  --lines   the numbered line menus instead, as without a terminal size,
+            on TERM=dumb and with --debug: a number and Enter
 
-Every option is open, done, or greyed with the reason this machine
-cannot have it (no TPM, no Bluetooth adapter, no wired interface, no
-recovery passphrase, an option it builds on missing). An option that
-needs another one control can set up offers it on the way: the vault and
-SSH set up the image's network first. The vault is asked before the
-enrolment - does it answer, with the pinned key - and at every look at
-the machine whether it still knows this device. What changes the boot
-image only marks it out of date - the status' "Boot image" line says
-why, against the boot plan ('tpm2-kira help initramfs'): a part in use
-now and not in the image, or in it with other settings. The image is
-built once, when you quit control, after you said yes; step 2 leads
-with "Ready to reboot" once the image is current and this boot did not
-go through it.
-
-The steps run without the commands' advisory warnings (a weak selection,
-SHA-1, Secure Boot off): the status says the same, judged and in red,
-and nothing is said twice. A slot whose deletion stopped halfway is
-dirty, marked [!] and recommended first, until a run removes the rest.
 Control alone writes the configuration, /etc/tpm2-kira/control.conf: the
 radio settings and the image's network and SSH server - what the image is
 built with, nothing else; and beside it aSSH's, /etc/tpm2-kira/assh.conf:
@@ -195,14 +191,13 @@ the SSH CA and its slots (the PCRs it signs in), the port, the keys that
 may log in. Beside them: the YubiKey's PIN, checked on the token, in
 /etc/tpm2-kira/pin (root's alone), and the keys that may log in at boot in
 /etc/tpm2-kira/authorized_keys.
-Every other file stays yours to edit, with two exceptions, each asked
-for every time: the HOOKS of mkinitcpio.conf and the key's route.
-Sealing both slots, each QR code gets a cleared screen of its own, held
-until the scan is confirmed: it is shown this once.
-On leaving it names the initramfs rebuild. Menus: a number and Enter;
-Ctrl-C, Ctrl-D or Esc leaves (in a submenu: back to step 2). No colours
-with NO_COLOR. Without a terminal it prints both steps and leaves (a
-script's look).
+Every other file stays yours to edit, with three exceptions, each asked
+for every time: the HOOKS of mkinitcpio.conf, the key's route and the PCR
+key's lines in uki.conf. The steps run without the commands' advisory
+warnings: the status says the same, judged, and nothing is said twice.
+The image is built once, when you leave control, after you said yes. No
+colours with NO_COLOR; ASCII glyphs where the locale is not UTF-8.
+Without a terminal it prints everything and leaves (a script's look).
 
   tpm2-kira control
 `,

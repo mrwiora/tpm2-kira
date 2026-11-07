@@ -74,20 +74,19 @@ const HoldDefault = 90 * time.Second
 // server's TPM2_KIRA_SSH_HOLD=0.
 const holdUnlimited = 100 * 365 * 24 * time.Hour
 
-// hintPrinter puts consoleHint on the console while the SSH server holds
-// the boot: at every new window, and as soon as an address comes up or a
-// session comes or goes.
+// hintPrinter puts sshscreen.ConsoleHint on the console while the SSH
+// server holds the boot: below every code screen, and as soon as an
+// address comes up or a session comes or goes.
 type hintPrinter struct {
 	srv  *sshscreen.Server
 	mu   sync.Mutex
 	last string // the addresses and sessions it last showed
-	left time.Duration
 	quit chan struct{}
 	once sync.Once
 }
 
 func startHintPrinter(srv *sshscreen.Server) *hintPrinter {
-	h := &hintPrinter{srv: srv, left: -1, quit: make(chan struct{})}
+	h := &hintPrinter{srv: srv, quit: make(chan struct{})}
 	go func() {
 		t := time.NewTicker(500 * time.Millisecond)
 		defer t.Stop()
@@ -102,7 +101,7 @@ func startHintPrinter(srv *sshscreen.Server) *hintPrinter {
 			addrs, n := sshscreen.Addresses(), srv.Count()
 			if key := fmt.Sprint(addrs, n); key != h.last && h.last != "" {
 				h.last = key
-				fmt.Print("\n" + sshscreen.ConsoleHint(srv.Opts.Port, addrs, srv.HostKey, n, h.left))
+				fmt.Print("\n" + sshscreen.ConsoleHint(srv.Opts.Port, addrs, srv.HostKey, n))
 			}
 			h.mu.Unlock()
 		}
@@ -110,17 +109,13 @@ func startHintPrinter(srv *sshscreen.Server) *hintPrinter {
 	return h
 }
 
-// print shows the hint now; remaining is the hold's time left.
-func (h *hintPrinter) print(remaining time.Duration) {
+// print shows the hint now.
+func (h *hintPrinter) print() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if remaining >= holdUnlimited/2 {
-		remaining = -1
-	}
-	h.left = remaining
 	addrs, n := sshscreen.Addresses(), h.srv.Count()
 	h.last = fmt.Sprint(addrs, n)
-	fmt.Print("\n" + sshscreen.ConsoleHint(h.srv.Opts.Port, addrs, h.srv.HostKey, n, remaining))
+	fmt.Print("\n" + sshscreen.ConsoleHint(h.srv.Opts.Port, addrs, h.srv.HostKey, n))
 }
 
 func (h *hintPrinter) stop() {
@@ -641,7 +636,7 @@ func showCodes(bd *board, ps parts, tpmPath string, nvramIndex uint32, planned i
 // file), and the key provider answers from what the parts opened before. The
 // image closes once more after this (fail-stop); here a failure is said.
 func (ps parts) release(bd *board, by string, closes bool) {
-	for _, p := range []part{ps.vault, ps.console, ps.ssh, ps.phone} {
+	for _, p := range []part{ps.vault, ps.console, ps.ssh, ps.phone, ps.net} {
 		if p != nil {
 			p.released(bd, by)
 		}
@@ -675,36 +670,46 @@ var closeBoot = func(tpmPath string) {
 	journal.Narrate("tpm2-kira: the boot is closed (PCR 15): no slot and no SSH CA until the next boot")
 }
 
-// showScreen is the code screen: in the SSH sessions while the hold lasts
-// when the SSH server runs (the console then says where), else on the
-// console.
+// showScreen is the code screen: on the console, and with the SSH server
+// in its sessions too, while the hold lasts - the same codes, the phone's
+// line and the network's; the console says below where to log in.
 func showScreen(bd *board, open func() (transport.TPMCloser, error), slots []totp.NVRAMSlot, codes map[int]string, remaining time.Duration) {
 	st, ok := gateStatus(bd.phone)
 	codes = phoneCodes(codes, slots, st, ok)
 	asking := ok && st.Asking()
+	var body bytes.Buffer
+	printSlots(&body, open, slots, codes)
+	if bd.network != nil {
+		fmt.Fprintf(&body, "%s %s\n", screen.Tag(screen.TagYellow), bd.network().Line())
+	}
+	left := ""
+	if remaining >= 0 && remaining < holdUnlimited/2 {
+		left = fmt.Sprintf(" (on its own in %d s)", int(remaining.Round(time.Second)/time.Second))
+	}
 	if bd.remote != nil && remaining >= 0 {
-		var out bytes.Buffer
-		printSlots(&out, open, slots, codes)
-		left := ""
-		if remaining < holdUnlimited/2 {
-			left = fmt.Sprintf(" (on its own in %d s)", int(remaining.Round(time.Second)/time.Second))
-		}
+		out := bytes.NewBuffer(slices.Clone(body.Bytes()))
 		if asking {
-			fmt.Fprintf(&out, "\n   Enter: continue without the phone%s; q: leave.\n\n", left)
+			fmt.Fprintf(out, "\n   Enter: continue without the phone%s; q: leave.\n\n", left)
 		} else {
-			fmt.Fprintf(&out, "\n   Does the code match your authenticator? Enter: continue to %s, asked here%s; q: leave.\n\n", nextPrompt(bd.promptMode()), left)
+			fmt.Fprintf(out, "\n   Does the code match your authenticator? Enter: continue to %s, asked here%s; q: leave.\n\n", nextPrompt(bd.promptMode()), left)
 		}
 		bd.remote(out.Bytes())
-		bd.hint(remaining)
+		os.Stdout.Write(body.Bytes())
+		bd.hint()
+		if asking {
+			fmt.Printf("   Enter here: continue at this console without the phone - the SSH server stops%s.\n\n", left)
+		} else {
+			fmt.Printf("   Does the code match your authenticator? Enter here: continue to %s at this console - the SSH server stops%s.\n\n", nextPrompt(bd.promptMode()), left)
+		}
 		return
 	}
-	printSlots(os.Stdout, open, slots, codes)
+	os.Stdout.Write(body.Bytes())
 	if remaining >= 0 {
 		fmt.Println()
 		if asking {
-			fmt.Printf("   Enter: continue without the phone (on its own in %d s).\n", int(remaining.Round(time.Second)/time.Second))
+			fmt.Printf("   Enter: continue without the phone%s.\n", left)
 		} else {
-			fmt.Printf("   Does the code match your authenticator? Enter: continue to %s (on its own in %d s).\n", nextPrompt(bd.promptMode()), int(remaining.Round(time.Second)/time.Second))
+			fmt.Printf("   Does the code match your authenticator? Enter: continue to %s%s.\n", nextPrompt(bd.promptMode()), left)
 		}
 	}
 	fmt.Println()

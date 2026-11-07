@@ -11,7 +11,10 @@ import (
 type fakeKeyboard struct {
 	calls   int
 	failure error
+	wiped   bool
 }
+
+func (k *fakeKeyboard) Wipe() { k.wiped = true }
 
 func (k *fakeKeyboard) From() string { return "your phone" }
 func (k *fakeKeyboard) Pepper(typed []byte) ([]byte, error) {
@@ -59,6 +62,9 @@ func TestKeyboardPrompt(t *testing.T) {
 	}
 	if strings.Join(*asked, ",") != "Password,Pepper" {
 		t.Fatalf("asked %v", *asked)
+	}
+	if !sess.wiped {
+		t.Fatal("the prompt left its copy of the layout")
 	}
 	if !strings.Contains((*notes)[0], "layout your phone shows") {
 		t.Fatalf("the note: %q", (*notes)[0])

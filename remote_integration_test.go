@@ -207,8 +207,11 @@ func TestRemoteSSHConfirmsAndUnlocks(t *testing.T) {
 	if n := strings.Count(b.out.String(), "WARNING: Secure Boot"); n != 1 {
 		t.Fatalf("the console says Secure Boot %d times:\n%s", n, b.out.String())
 	}
-	if strings.Contains(b.out.String(), "Does the code match") {
-		t.Fatalf("the console shows the codes:\n%s", b.out.String())
+	// The console shows the session's screen too, and that Enter there
+	// continues at the console.
+	b.waitOutput(t, "Enter here: continue to")
+	if out := b.out.String(); !strings.Contains(out, "#0") || !strings.Contains(out, "Does the code match your authenticator?") {
+		t.Fatalf("the console lacks the codes:\n%s", out)
 	}
 	b.waitOutput(t, "An SSH session is connected")
 	b.waitOutput(t, "a temporary key, the SSH CA did not certify one") // none in this image

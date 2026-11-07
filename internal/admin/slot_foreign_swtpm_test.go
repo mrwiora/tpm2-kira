@@ -255,7 +255,7 @@ func TestControlForeignGenerationIndex(t *testing.T) {
 		err := c.runRemoveSlot(0)
 		return out.String(), err
 	}
-	out, err := run("y\n\n")
+	out, err := run("0\n\n") // the slot's word, then No to the index of another shape
 	t.Logf("control, answered No:\n%s\n%v", out, err)
 	for _, want := range []string{"[y/N]", "read_stclear", "Remove the NV index 0x01803810?"} {
 		if !strings.Contains(out, want) {
@@ -268,7 +268,7 @@ func TestControlForeignGenerationIndex(t *testing.T) {
 	if !tpmdev.NVRAMIndexExists(tpm, gen) {
 		t.Fatal("No took the index")
 	}
-	if out, err = run("y\ny\n"); err != nil {
+	if out, err = run("0\ny\n"); err != nil {
 		t.Fatalf("yes: %v\n%s", err, out)
 	}
 	if tpmdev.NVRAMIndexExists(tpm, gen) || len(collectDirt(sock, nil)) != 0 {

@@ -14,9 +14,10 @@ the host key is made in the TPM at every boot and certified by a
 certificate authority that never leaves the TPM either.
 Whoever logs in sees the codes, confirms them, and types the disk's
 password in the session; when tpm2-kira has no key to give, cryptsetup's
-own prompt is asked there too. The console says where to log in, and
-Enter at the console continues there instead: a person at the machine is
-never held by a remote session.
+own prompt is asked there too. The console shows the same code screen -
+the codes, the phone's line, the network's state - and below it where to
+log in; Enter at the console continues there instead: a person at the
+machine is never held by a remote session.
 
 Over SSH, the code is what attests the boot: you compare it with your
 authenticator as at the console. The phone attests at the machine only
@@ -60,6 +61,7 @@ format, `ASSH_*`, read with its `config` package).
 | `TPM2_KIRA_NET_ADDRESS` | static: addresses with prefix, space-separated |
 | `TPM2_KIRA_NET_GATEWAY`, `TPM2_KIRA_NET_DNS` | IP addresses, space-separated |
 | `TPM2_KIRA_NET_DHCP_ID` | the identity the image asks the DHCP server with: `auto` (default) the running system's, read at every image build (§2.1); `mac`; or a client identifier in hex (`ff:56:50:…`) |
+| `TPM2_KIRA_NET_ANNOUNCE` | `on` (default): each new address is said to the link (§5.3); `off`: nothing beyond the DHCP client |
 | `TPM2_KIRA_SSH` | `off` (default), `on` (needs a network) |
 | `TPM2_KIRA_SSH_HOLD` | seconds the boot waits for a confirmation; `0` (default): until one comes |
 
@@ -414,8 +416,9 @@ tpm2-kira.service (holds READY)
   ├── the TPM makes this boot's host key, the SSH CA certifies it (slot 0 or 1),
   │   opens :PORT, starts 'ssh-child'; the CA closes (PCR 15 extended)
   │   with every slot when the code screen is over
-  ├── console: "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
-  │            "Enter here: continue at this console"
+  ├── console: the same code screen and the network's line; below it
+  │            "ssh root@<address>", the SSH CA's fingerprint, sessions connected,
+  │            "Enter here: continue to ... at this console"
   └── sessions: the code screen; Enter confirms, q leaves
 ```
 
@@ -462,6 +465,32 @@ init-bottom/tpm2-kira
 The interface is taken down before the real root takes over: ifupdown or
 NetworkManager configure it again, and an address left from the image
 would stay beside theirs.
+
+### 5.3 The network's line and the announcement
+
+Whenever the image has a network, `run` watches it (`internal/netstate`; the
+image's `/etc/tpm2-kira/remote.conf` names the mode, the interface and
+`TPM2_KIRA_NET_ANNOUNCE`, on both distributions) and configures nothing:
+networkd or the image's scripts bring it up.
+
+- **The line.** The code screen carries the network's state, on the console
+  and in the SSH sessions: yellow `Network (DHCP) on enp1s0: WAITING FOR AN
+  ADDRESS ... (12 s)` (or no interface yet, the driver not loaded), red `NO
+  LINK - is the cable plugged in?`, green the addresses and gateways. A change
+  is said on the console at once, a network that is not up again every 15 s,
+  and each change goes into the boot's log (`network: ...`); after the code
+  screen the console is the prompt's, and nothing more is said. Without a code
+  screen (the vault alone) the line is said all the same.
+- **The announcement** (`TPM2_KIRA_NET_ANNOUNCE=on`, the default). A machine
+  that gets an address back - its own of the last boot, or another machine's -
+  can stay unreachable while the switch, the gateway or a host beside it holds
+  an old entry. Each new address is said three times, a second apart: an IPv4
+  address by a gratuitous ARP as a request and as a reply, an IPv6 address by
+  an unsolicited neighbour advertisement with the override flag, and every
+  gateway of the interface gets an echo request, so that it resolves the
+  machine itself. Only sent: no answer is read, so nothing from the network
+  is parsed in `run`. The boot's log says `network: announced <address> on
+  <interface>`; a failure is said there and stops nothing.
 
 ## 6. cryptsetup's own prompt
 

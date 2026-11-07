@@ -37,6 +37,10 @@ type NetConfig struct {
 	// asks the DHCP server with - "auto" (the running system's, read at
 	// the build), "mac", or one in hex (remote_dhcpid.go).
 	DHCPID string
+	// Announce is TPM2_KIRA_NET_ANNOUNCE: the boot tells the neighbours
+	// and the gateways a new address (internal/netstate), so that no stale
+	// ARP or neighbour entry keeps the machine unreachable. On by default.
+	Announce bool
 }
 
 // SSHConfig is the image's SSH server, started by 'tpm2-kira-boot run' while
@@ -69,7 +73,7 @@ const (
 // DefaultRemoteConfig is a file without these lines: no network, no SSH.
 func DefaultRemoteConfig() RemoteConfig {
 	return RemoteConfig{
-		Net: NetConfig{Mode: "off", DHCPID: "auto"},
+		Net: NetConfig{Mode: "off", DHCPID: "auto", Announce: true},
 		SSH: SSHConfig{Assh: sshConfDefaults(config.Default(), DefaultControlConfigPath)},
 	}
 }
@@ -133,6 +137,15 @@ func parseRemoteLine(cfg *RemoteConfig, n int, key, val string) (handled bool, e
 				return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_NET_DHCP_ID must be %v", n, err)
 			}
 			cfg.Net.DHCPID = strings.ToLower(val)
+		}
+	case "TPM2_KIRA_NET_ANNOUNCE":
+		switch val {
+		case "", "on":
+			cfg.Net.Announce = true
+		case "off":
+			cfg.Net.Announce = false
+		default:
+			return true, fmt.Errorf("control.conf line %d: TPM2_KIRA_NET_ANNOUNCE must be on or off, not %q", n, val)
 		}
 	case "TPM2_KIRA_SSH":
 		switch val {
@@ -237,6 +250,7 @@ func (r RemoteConfig) Lines() [][2]string {
 		{"TPM2_KIRA_NET_GATEWAY", quoteList(r.Net.Gateways)},
 		{"TPM2_KIRA_NET_DNS", quoteList(r.Net.DNS)},
 		{"TPM2_KIRA_NET_DHCP_ID", r.Net.DHCPID},
+		{"TPM2_KIRA_NET_ANNOUNCE", onOff[r.Net.Announce]},
 		{"TPM2_KIRA_SSH", onOff[r.SSH.On]},
 		{"TPM2_KIRA_SSH_HOLD", strconv.Itoa(r.SSH.Hold)},
 	}
@@ -461,15 +475,22 @@ func (n NetConfig) Describe() string {
 	}
 	switch n.Mode {
 	case "dhcp":
-		return "DHCP on " + where
+		return "DHCP on " + where + n.announced()
 	case "static":
 		s := strings.Join(n.Addresses, " ") + " on " + where
 		if len(n.Gateways) > 0 {
 			s += ", gateway " + strings.Join(n.Gateways, " ")
 		}
-		return s
+		return s + n.announced()
 	}
 	return "off"
+}
+
+func (n NetConfig) announced() string {
+	if n.Announce {
+		return ", announced"
+	}
+	return ", not announced"
 }
 
 // suggestFromIfupdown proposes from the first wired interface of this

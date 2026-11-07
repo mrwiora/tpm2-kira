@@ -431,9 +431,10 @@ func Addresses() []string {
 	return append(v4, v6...)
 }
 
-// ConsoleHint is what the console shows instead of the codes: where to log
-// in, that the boot waits for it, and that Enter continues here.
-func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remaining time.Duration) string {
+// ConsoleHint is what the console shows below the code screen while the
+// SSH server holds the boot: where to log in, the host key, the sessions.
+// The network's own state is the screen's line above it (netstate).
+func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int) string {
 	var b strings.Builder
 	p := ""
 	if port != 22 {
@@ -441,7 +442,7 @@ func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	}
 	fmt.Fprintf(&b, "%s The code screen over SSH:", screen.Tag(screen.TagYellow))
 	if len(addrs) == 0 {
-		fmt.Fprintf(&b, " waiting for a network address (port %d) ...\n", port)
+		fmt.Fprintf(&b, " port %d, once the network has an address\n", port)
 	} else {
 		b.WriteString("\n")
 		for _, a := range addrs {
@@ -455,11 +456,7 @@ func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	} else if hk.CA != "" {
 		fmt.Fprintf(&b, "         Host key certified by the SSH CA %s\n", hk.CA)
 	}
-	b.WriteString("         The codes are shown and confirmed in the SSH session; the boot waits for it")
-	if remaining >= 0 {
-		fmt.Fprintf(&b, " (%d s)", int(remaining.Round(time.Second)/time.Second))
-	}
-	b.WriteString(".\n")
+	b.WriteString("         Confirmed in an SSH session, the password is asked there.\n")
 	switch sessions {
 	case 0:
 	case 1:
@@ -467,7 +464,6 @@ func ConsoleHint(port int, addrs []string, hk hostKeyAtBoot, sessions int, remai
 	default:
 		fmt.Fprintf(&b, "         %d SSH sessions are connected.\n", sessions)
 	}
-	b.WriteString("         Enter here: continue at this console instead - the SSH server stops.\n")
 	return b.String()
 }
 

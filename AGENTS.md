@@ -92,6 +92,12 @@ It may not carry what came before.
   out is in docs/SSH.md, "The close: what it can come to". Every other outcome of the
   close goes on to the passphrase.
   Do not build a mode that holds the boot on the phone's verdict.
+- **Every derivation of a disk's key is pinned by a known answer** (docs/DISK-KEY.md, "The
+  derivations"): `Combine`, the phone's and the TPM's salt, the vault's salt, password and pepper
+  check, the keyboard pepper's salt, the keyboard's layout. A test against fixed bytes each; a
+  change of one changes enrolled disks' keys (or, for the layout, splits phone and machine), so it
+  needs a "what breaks" and the owner's word, never a new expected value alone. A new derivation
+  gets its row and its known answer with it, and the protocol's `lp`.
 - **A pepper typed through a one-time keyboard is kept by nothing** (`0x1302`, `0x1402`;
   `core/attest/keyboard.go`): the salt stays the phone's or the vault's, unreadable to them; the seed
   of the boot's layout is released with it, wrapped for the TPM as well as the channel; the pepper, the

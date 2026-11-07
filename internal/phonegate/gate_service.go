@@ -434,6 +434,9 @@ type phoneKeyboard struct{ layout *attest.KeyboardLayout }
 
 func (k *phoneKeyboard) From() string { return "your phone" }
 
+// Wipe clears this prompt's copy of the layout; the prompt calls it when done.
+func (k *phoneKeyboard) Wipe() { k.layout.Wipe() }
+
 // Pepper implements diskkey.KeyboardSession: the phone hears nothing back, so a wrong pepper of the
 // right form makes a key that opens nothing, as a mistyped password does.
 func (k *phoneKeyboard) Pepper(typed []byte) ([]byte, error) {
