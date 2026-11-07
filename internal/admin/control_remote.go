@@ -252,8 +252,9 @@ func (c *controller) offerRemoveSSHCA(path string) error {
 	if !sshCAThere(path) {
 		return nil
 	}
-	ok, err := c.confirm("Remove the SSH CA too?",
-		"The SSH server is off. Kept, the CA "+path+" serves again when SSH is switched on, and the clients' known_hosts line stays good. Removed (the EFI variable and "+sshCAPub(path)+"), a CA made later is a new one that every client must trust again.")
+	fmt.Fprintln(c.out, "The SSH server is off. Kept, the CA "+path+" serves again when SSH is switched on, and the clients' known_hosts line stays good.")
+	ok, err := c.confirmDestroy("Remove the SSH CA too?",
+		"the SSH CA (the EFI variable and "+sshCAPub(path)+"): a CA made later is a new one that every client must trust again", "delete")
 	if err != nil || !ok {
 		return err
 	}

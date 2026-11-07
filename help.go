@@ -114,6 +114,16 @@ ssh-child | gate-child; docs/ and README.md
 
 // printHelp prints a command's page, or the overview after a note when
 // there is none.
+// helpTopics are the help pages' names, sorted: control's Reference.
+func helpTopics() []string {
+	names := make([]string, 0, len(helpPages))
+	for n := range helpPages {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func printHelp(topic string) {
 	topic = strings.TrimPrefix(topic, "--")
 	if page, ok := helpPages[topic]; ok {

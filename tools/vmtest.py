@@ -1829,8 +1829,9 @@ WantedBy=sysinit.target
             pick(r"Network and SSH at boot")
             pick(r"SSH server at boot")
             s.expect(r"Start the SSH server with the code screen\? \[(y/N|Y/n)\] ?$"); s.send("n\n")
-            s.expect(r"Remove the SSH CA too\? \[y/N\] ?$", 60); s.send("n\n")
-            self.check("control asks before it removes the SSH CA when SSH is switched off", True)
+            # A destroying question takes its word alone: n, as Enter, keeps the CA.
+            s.expect(r"Remove the SSH CA too\? Type delete to destroy it: ?$", 60); s.send("n\n")
+            self.check("control asks for the word before it removes the SSH CA when SSH is switched off; n keeps it", True)
             pick(r"Back to step 2")
             pick(r"^\s*Quit$")
             # SSH switched off makes the image out of date: the next boot

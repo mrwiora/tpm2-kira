@@ -211,10 +211,14 @@ func (c *controller) runLuks(recipe diskkey.Recipe) error {
 			}
 		}
 		e := have[i]
-		ok, err := c.confirm(fmt.Sprintf("Remove keyslot %d of %s?", e.ks.Keyslot, e.device),
-			"This keyslot is enrolled already ("+recipe.Describe()+"), so picking the step offers its removal. The key opens nothing afterwards; a remaining passphrase (the recovery one) authorises it, and enrolling anew is this same step.")
-		if err != nil || !ok {
-			return errors.New("not confirmed")
+		fmt.Fprintf(c.out, "This keyslot is enrolled already (%s), so picking the step offers its removal; enrolling anew is this same step. A remaining passphrase (the recovery one) authorises it.\n\n", recipe.Describe())
+		ok, err := c.confirmDestroy(fmt.Sprintf("Remove keyslot %d of %s?", e.ks.Keyslot, e.device),
+			fmt.Sprintf("keyslot %d of %s (%s): this way opens the disk no more", e.ks.Keyslot, e.device, recipe.Describe()), fmt.Sprint(e.ks.Keyslot))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errKept
 		}
 		return LuksRemove(LuksRemoveOptions{Device: e.device, Keyslot: e.ks.Keyslot, TPMPath: c.o.TPMPath})
 	}
@@ -283,10 +287,14 @@ func (c *controller) runRemoveSlot(slot int) error {
 			label = "dirty: " + d.Remains() + " left"
 		}
 	}
-	ok, err := c.confirm(fmt.Sprintf("Delete slot %d whole?", slot),
-		"Gone for good: "+label+". The authenticator's code for it stops matching. Removing a LUKS keyslot asks for a remaining passphrase (the recovery one); keyslots that are not tpm2-kira's stay.")
-	if err != nil || !ok {
-		return errors.New("not confirmed")
+	fmt.Fprintln(c.out, "The authenticator's code for it stops matching. Removing a LUKS keyslot asks for a remaining passphrase (the recovery one); keyslots that are not tpm2-kira's stay.")
+	fmt.Fprintln(c.out)
+	ok, err := c.confirmDestroy(fmt.Sprintf("Delete slot %d whole?", slot), "slot "+fmt.Sprint(slot)+", "+label, fmt.Sprint(slot))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errKept
 	}
 	return DeleteSlot(DeleteSlotOptions{TPMPath: c.o.TPMPath, Slot: slot, Debug: c.o.Debug, Out: c.out,
 		Foreign: foreignAsk(c.out, c.confirm)})

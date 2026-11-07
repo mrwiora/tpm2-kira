@@ -32,6 +32,10 @@ var controlMenus = []controlMenu{
 		intro: "How the disk's key is made at boot, beside the recovery passphrase: each way is a keyslot of its own, and they combine - at boot the one that answers first opens the disk, and cryptsetup's own prompt stays the fallback."},
 	{key: "remote", title: "Network and SSH at boot",
 		intro: "The boot image's own network - for the vault, and for tpm2-kira's SSH server, where the codes are confirmed and passwords typed remotely. Set for the image alone; the running system's network stays as it is."},
+	{key: "tools", title: "Tools: what the commands say",
+		intro: "Views: the commands that read the machine, run as they are. Nothing here changes anything."},
+	{key: "reference", title: "Reference: the help pages",
+		intro: "The help page of every command, the expert ones included: luks mark and derive, phone salt rotate, phone quote and verify are done by hand, as the pages say."},
 }
 
 func menuByKey(key string) controlMenu {
@@ -108,6 +112,10 @@ func (c *controller) menuSteps(key string) []controlStep {
 		return c.diskSteps()
 	case "remote":
 		return []controlStep{c.netStep(), c.sshStep()}
+	case "tools":
+		return c.toolSteps()
+	case "reference":
+		return c.referenceSteps()
 	}
 	return nil
 }
@@ -241,7 +249,7 @@ func (c *controller) keysSteps() []controlStep {
 	for _, n := range order {
 		steps = append(steps, lines[n])
 	}
-	return steps
+	return append(steps, c.sealMoreStep(), c.approveStep(), c.deleteAllStep())
 }
 
 // phoneSteps: the enrolment of a phone, and whether Bluetooth is packed
@@ -292,7 +300,7 @@ func (c *controller) phoneSteps() []controlStep {
 	case f.AttestConf != "":
 		bt.Blocked = controlConfigPath() + ": " + f.AttestConf
 	}
-	return []controlStep{attest, bt}
+	return append([]controlStep{attest, bt}, c.phoneRemoveSteps()...)
 }
 
 // diskGate is what every disk key needs: a LUKS device, a recovery
@@ -391,7 +399,7 @@ func (c *controller) diskSteps() []controlStep {
 	if done := c.boundKeyslots(strongSlot(strong), diskkey.RecipePhoneKeyboard); strong != nil && len(done) > 0 {
 		keyboard.Done, keyboard.Blocked = strings.Join(done, ", "), ""
 	}
-	return []controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt, keyboard}
+	return append([]controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt, keyboard}, c.saltRemoveSteps()...)
 }
 
 // debugStep is the boot settings' debug switch, on step 2 itself.

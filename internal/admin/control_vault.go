@@ -251,10 +251,14 @@ func (c *controller) vaultEnrolled(s StatusSlot) error {
 	if choice == "check" {
 		return nil // the overview asks it again
 	}
-	ok, err := c.confirm("Remove the vault from slot "+fmt.Sprint(s.Slot)+"?",
-		"The vault's keyslots go - removing a keyslot asks for a remaining passphrase (the recovery one) - and the slot's local part with them. The vault keeps its record until its operator revokes the device.")
-	if err != nil || !ok {
-		return errors.New("not confirmed")
+	fmt.Fprintln(c.out, "Removing a keyslot asks for a remaining passphrase (the recovery one). The vault keeps its record until its operator revokes the device.")
+	ok, err := c.confirmDestroy("Remove the vault from slot "+fmt.Sprint(s.Slot)+"?",
+		"the vault's keyslots and the slot's local part", fmt.Sprint(s.Slot))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errKept
 	}
 	for _, d := range c.facts.Status.Devices {
 		for _, ks := range d.Keyslots {

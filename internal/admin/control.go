@@ -42,6 +42,10 @@ type ControlOptions struct {
 	TPMPath string
 	Debug   bool
 	Out     io.Writer // default stdout
+	// Lines forces the numbered line menus instead of the full screen.
+	Lines bool
+	// HelpTopics are the pages of 'tpm2-kira help', for the Reference section.
+	HelpTopics []string
 }
 
 // emptyPassSeen caches the empty-passphrase test of a keyslot for this
@@ -65,6 +69,12 @@ type controlStep struct {
 	SelfConfirm bool   // Run confirms by itself; picked straight even when Done
 	Menu        string // picking opens this screen instead of running anything
 	Run         func(c *controller) error
+	// Danger is how much it can break (dangerChange, dangerView, dangerDestroy);
+	// Destroys says what a destroying step removes. Command is what the step equals
+	// on the command line (annotate).
+	Danger   int
+	Destroys string
+	Command  string
 }
 
 // The one colour language of the overview: green is good and done, orange
@@ -201,11 +211,11 @@ func Control(o ControlOptions) error {
 func (c *controller) screenSteps() []controlStep {
 	switch c.screen {
 	case "chain":
-		return c.chainSteps()
+		return c.annotated(c.chainSteps())
 	case "hub":
-		return c.hubSteps()
+		return c.annotated(c.hubSteps())
 	}
-	return append(c.menuSteps(c.screen), controlStep{Key: "back", Title: "Back to step 2", Optional: true, Menu: "hub"})
+	return append(c.annotated(c.menuSteps(c.screen)), controlStep{Key: "back", Title: "Back to step 2", Optional: true, Menu: "hub"})
 }
 
 // screenTitle names the screen, under the header.
@@ -269,6 +279,8 @@ func stepLabel(s controlStep) string {
 	switch {
 	case s.Dirty != "":
 		return indent + bad("!") + " " + s.Title + "  - " + s.Dirty
+	case s.Done != "" && s.Danger == dangerDestroy:
+		return indent + good("✓") + " " + s.Title + "  - " + s.Done + "  " + bad("(picking it destroys it)")
 	case s.Done != "":
 		return indent + good("✓") + " " + s.Title + "  - " + s.Done
 	case s.Blocked != "":
@@ -277,6 +289,8 @@ func stepLabel(s controlStep) string {
 		return "  " + s.Title
 	case s.Menu != "":
 		return indent + amber("•") + " " + s.Title + "  >"
+	case s.Danger == dangerView:
+		return indent + "  " + s.Title
 	}
 	return indent + amber("•") + " " + s.Title
 }

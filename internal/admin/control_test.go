@@ -107,8 +107,9 @@ func wired() *controller {
 func TestControlHub(t *testing.T) {
 	c := wired()
 	steps := c.hubSteps()
-	if len(steps) != 6 || steps[0].Key != "chain" || steps[0].Done != "in place" || steps[1].Key != "menu:keys" ||
-		steps[2].Key != "menu:phone" || steps[3].Key != "menu:disk" || steps[4].Key != "menu:remote" || steps[5].Key != "debug" {
+	if len(steps) != 8 || steps[0].Key != "chain" || steps[0].Done != "in place" || steps[1].Key != "menu:keys" ||
+		steps[2].Key != "menu:phone" || steps[3].Key != "menu:disk" || steps[4].Key != "menu:remote" ||
+		steps[5].Key != "menu:tools" || steps[6].Key != "menu:reference" || steps[7].Key != "debug" {
 		t.Fatalf("step 2: %+v", steps)
 	}
 	if recommended(steps) != 1 || steps[1].Optional || !steps[2].Optional {
@@ -148,7 +149,8 @@ func TestControlHub(t *testing.T) {
 	c.facts.Keys = "local key files"
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}, {Slot: 1, PCRs: "0e,7e", Fallback: true, Signed: true}}
 	keys = c.menuSteps("keys")
-	if len(keys) != 3 || keys[1].Key != "slot:0" || keys[1].Done != "sealed to 0e,2e,7e,11u" || keys[2].Done != "the fallback, sealed to 0e,7e" {
+	if len(keys) != 6 || keys[1].Key != "slot:0" || keys[1].Done != "sealed to 0e,2e,7e,11u" || keys[2].Done != "the fallback, sealed to 0e,7e" ||
+		keys[3].Key != "seal-more" || keys[3].Blocked != "" || keys[4].Key != "approve" || keys[5].Key != "delete-all" || keys[5].Blocked != "" {
 		t.Fatalf("sealed: %+v", keys)
 	}
 	if st := c.hubSteps()[2]; st.Key != "menu:keys" || st.Done != "Signing key, Slot 0, Slot 1" {

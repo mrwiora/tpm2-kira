@@ -183,8 +183,9 @@ func main() {
 		fs := flag.NewFlagSet("control", flag.ExitOnError)
 		tpm := fs.String("tpm", *tpmPath, "Path to TPM device")
 		dbg := fs.Bool("debug", *debug, "Enable debug output")
+		lines := fs.Bool("lines", false, "The numbered line menus instead of the full screen")
 		parseSigning(fs, commandArgs)
-		if err := admin.Control(admin.ControlOptions{TPMPath: *tpm, Debug: *dbg}); err != nil {
+		if err := admin.Control(admin.ControlOptions{TPMPath: *tpm, Debug: *dbg, Lines: *lines, HelpTopics: helpTopics()}); err != nil {
 			fail(err)
 		}
 	case "status":
