@@ -508,11 +508,33 @@ func (c *controller) screenHeader(loading bool) string {
 
 // screenLoop is control on its full screen, until it is left.
 func (c *controller) screenLoop() error {
-	term := tui.Open(c.input(), c.out)
 	g := tui.GlyphsFor(tui.UTF8Locale())
-	scr := tui.NewScreen(c.out, tui.Colour(), g)
-	keys := tui.NewReader(term.FD())
 	st := &screenState{}
+	// While the frame is up, what the facts' collection prints (a warning deep in a
+	// package) is kept off it: shown below the screen when a step runs or control is
+	// left (tui.Hush). Not in the tests, whose terminal is not stdout.
+	var hush *tui.Hush
+	screenOut := func() *os.File {
+		if c.in != nil {
+			return c.in
+		}
+		h, err := tui.StartHush()
+		if err != nil {
+			return os.Stdout
+		}
+		hush = h
+		return h.Screen
+	}
+	unhush := func() {
+		if hush == nil {
+			return
+		}
+		if out := hush.Stop(); len(out) > 0 {
+			os.Stdout.Write(out)
+		}
+		hush.Close()
+		hush = nil
+	}
 
 	// The facts, in the background: the fast ones first, the slow ones after.
 	type facts struct {
@@ -530,15 +552,40 @@ func (c *controller) screenLoop() error {
 			got <- facts{f, true}
 		}()
 	}
-	loading := true
-	collect()
+	waitFacts := func() {
+		for collecting {
+			fs := <-got
+			c.facts, collecting = fs.f, !fs.slow
+		}
+	}
 
-	if err := term.Enter(); err != nil {
+	var term *tui.Term
+	var scr *tui.Screen
+	var keys *tui.Reader
+	enter := func() error {
+		out := screenOut()
+		term = tui.Open(c.input(), out)
+		scr = tui.NewScreen(out, tui.Colour(), g)
+		keys = tui.NewReader(term.FD())
+		if err := term.Enter(); err != nil {
+			unhush()
+			return err
+		}
+		return nil
+	}
+	leave := func() {
+		term.Leave()
+		unhush()
+	}
+
+	loading := true
+	if err := enter(); err != nil {
 		return err
 	}
+	collect() // inside the hush: what it prints stays off the frame
 	defer func() {
 		if r := recover(); r != nil {
-			term.Leave()
+			leave()
 			panic(r)
 		}
 	}()
@@ -585,7 +632,7 @@ func (c *controller) screenLoop() error {
 		}
 		k, ok, err := keys.Read(200 * time.Millisecond)
 		if err != nil {
-			term.Leave()
+			leave()
 			return err
 		}
 		if !ok {
@@ -594,11 +641,8 @@ func (c *controller) screenLoop() error {
 		_, rows, _ := term.Size()
 		switch st.key(k, m, max(rows/2, 5)) {
 		case cmdQuit:
-			term.Leave()
-			for collecting { // the slow facts finish first: leave looks again anyway
-				fs := <-got
-				collecting = !fs.slow
-			}
+			waitFacts() // leave looks again anyway; nothing may print under it
+			leave()
 			c.leave()
 			return nil
 		case cmdRefresh:
@@ -610,17 +654,13 @@ func (c *controller) screenLoop() error {
 			scr.Invalidate()
 		case cmdRun:
 			if s := st.selected(m); s != nil && !loading {
-				for collecting { // a step works on the whole facts
-					fs := <-got
-					c.facts, collecting = fs.f, !fs.slow
-				}
+				waitFacts() // a step works on the whole facts
 				step := *s
-				term.Leave()
+				leave()
 				c.runStep(step)
-				if err := term.Enter(); err != nil {
+				if err := enter(); err != nil {
 					return err
 				}
-				scr.Invalidate()
 				loading = true
 				collect()
 			}

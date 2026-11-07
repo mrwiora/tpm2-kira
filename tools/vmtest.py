@@ -841,7 +841,7 @@ class Machine:
                 except Fail:
                     if time.time() > deadline:
                         raise
-            self.check("control: the arrows move the cursor (reverse video)", b"\x1b[7m" in s.buf[s.mark - 2000:], repr(s.buf[-300:]))
+            self.check("control: the arrows move the cursor (reverse video)", b"\x1b[7m" in s.buf[max(0, s.mark - 2000):], repr(s.buf[-300:]))
             s.send("?"); s.expect(r"Up, Down", 20)
             s.send("?")
             # A resize: ssh carries the window change, control draws the new size.
@@ -852,6 +852,10 @@ class Machine:
             out = s.wait_end(120)
             self.log.save("control-keys.log", out)
             self.check("control: q leaves the alternate screen and shows the cursor again", b"\x1b[?1049l" in s.buf and b"\x1b[?25h" in s.buf, repr(s.buf[-400:]))
+            # What the facts' collection prints (PCR 4's prediction, say) is kept off the
+            # frame and shown after it: nothing but the frame between taking and leaving.
+            framed = s.buf[s.buf.find(b"\x1b[?1049h"):s.buf.rfind(b"\x1b[?1049l")]
+            self.check("control: nothing the commands print runs through the frame", b"\r\n" not in framed.replace(b"\x1b[?1049h", b""), repr(framed[:300]))
             self.check("control: the terminal is given back after the full screen", re.search(r"(?<![-\w])icanon\b", out) is not None and re.search(r"(?<![-\w])echo\b", out) is not None, out[-600:])
         except Fail as e:
             self.check("control's full screen", False, str(e))

@@ -189,3 +189,22 @@ func TestTermOnAPty(t *testing.T) {
 		t.Fatalf("not given back: %x/%x, %q", after.Lflag, before.Lflag, out.String())
 	}
 }
+
+// While the hush holds, stdout and stderr go into its buffer and the screen's file is
+// the terminal stdout was; Stop gives them back with what came.
+func TestHush(t *testing.T) {
+	h, err := StartHush()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout.WriteString("a warning\n")
+	os.Stderr.WriteString("an error\n")
+	got := string(h.Stop())
+	h.Close()
+	if got != "a warning\nan error\n" {
+		t.Fatalf("held %q", got)
+	}
+	if _, err := os.Stdout.WriteString(""); err != nil {
+		t.Fatalf("stdout not given back: %v", err)
+	}
+}
