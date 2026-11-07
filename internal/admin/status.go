@@ -430,14 +430,6 @@ func shortKeyslot(ks KeyslotStatus) string {
 	return ks.Token.Recipe.Describe()
 }
 
-func quoted(names []string) string {
-	q := make([]string, len(names))
-	for i, n := range names {
-		q[i] = strconv.Quote(n)
-	}
-	return strings.Join(q, ", ")
-}
-
 // phonesText says how many phones attest a slot, without naming them.
 func phonesText(n int) string {
 	if n == 1 {

@@ -475,16 +475,3 @@ func resolveResealKeys(sealedData []byte, sealedBlob *nvslot.SealedBlob, privKey
 	}
 	return keys, nil
 }
-
-// IsTPMAuthError checks if an error is a TPM authentication/authorization failure
-func IsTPMAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "tpm_rc_auth_fail") ||
-		strings.Contains(errStr, "tpm_rc_bad_auth") ||
-		strings.Contains(errStr, "authorization failure") ||
-		strings.Contains(errStr, "auth fail") ||
-		strings.Contains(errStr, "bad auth")
-}

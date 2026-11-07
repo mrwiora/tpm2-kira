@@ -49,7 +49,7 @@ func runSkippedApproval() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	signer, err := signing.LoadSigningPrivateKey(path)
+	signer, err := loadSigner(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

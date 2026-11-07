@@ -2,7 +2,6 @@ package diskkey
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -159,16 +158,6 @@ func RecipeOf(password, salt string, pepper, keyboard bool) (Recipe, error) {
 		return 0, fmt.Errorf("%w; the recipes are: %s", err, strings.Join(ok, "; "))
 	}
 	return r, nil
-}
-
-// ParseRecipe reads a recipe's number as String writes it ("0x1401").
-func ParseRecipe(s string) (Recipe, error) {
-	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 16)
-	if err != nil {
-		return 0, fmt.Errorf("a recipe is a number like 0x1401, not %q", s)
-	}
-	r := Recipe(v)
-	return r, r.Check()
 }
 
 // String is the recipe's number, "0x1401".

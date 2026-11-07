@@ -73,7 +73,7 @@ func TestPrepareSigningKey(t *testing.T) {
 	fake := &fakeTokens{cards: []*pivtest.Card{card}}
 	fake.install(t)
 	path := writeStub(t, 1, probeSlot(t, 1, piv.SlotAuthentication))
-	signer, _ := signing.LoadSigningPrivateKey(path)
+	signer, _ := loadSigner(path)
 
 	// Software keys are always ready.
 	software, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

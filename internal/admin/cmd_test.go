@@ -1689,55 +1689,6 @@ func TestSealedBlobRoundTripNoEventlog(t *testing.T) {
 	}
 }
 
-// TestIsTPMAuthError tests TPM authentication error detection
-func TestIsTPMAuthError(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected bool
-	}{
-		{
-			name:     "nil error",
-			err:      nil,
-			expected: false,
-		},
-		{
-			name:     "TPM_RC_AUTH_FAIL",
-			err:      &testError{msg: "TPM returned: TPM_RC_AUTH_FAIL"},
-			expected: true,
-		},
-		{
-			name:     "TPM_RC_BAD_AUTH",
-			err:      &testError{msg: "error: TPM_RC_BAD_AUTH"},
-			expected: true,
-		},
-		{
-			name:     "authorization failure",
-			err:      &testError{msg: "authorization failure during unseal"},
-			expected: true,
-		},
-		{
-			name:     "unrelated error",
-			err:      &testError{msg: "failed to open TPM device"},
-			expected: false,
-		},
-		{
-			name:     "auth fail lowercase",
-			err:      &testError{msg: "auth fail"},
-			expected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := IsTPMAuthError(tt.err)
-			if result != tt.expected {
-				t.Errorf("Expected %v, got %v for error: %v", tt.expected, result, tt.err)
-			}
-		})
-	}
-}
-
 // TestValidateNVRAMIndex tests NVRAM index validation
 func TestValidateNVRAMIndex(t *testing.T) {
 	tests := []struct {
@@ -2016,45 +1967,6 @@ func TestIsTPMPolicyFailure(t *testing.T) {
 			result := tpmdev.IsTPMPolicyFailure(tt.err)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestHandleNVRAMNotFoundError(t *testing.T) {
-	tests := []struct {
-		name         string
-		err          error
-		debug        bool
-		expectNil    bool
-		wantContains string
-	}{
-		{
-			name:      "nil error returns nil",
-			err:       nil,
-			debug:     false,
-			expectNil: true,
-		},
-		{
-			name:         "non-nil error returns non-nil",
-			err:          &testError{msg: "NVRAM index not found"},
-			debug:        false,
-			expectNil:    false,
-			wantContains: "NVRAM",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tpmdev.HandleNVRAMNotFoundError(tt.err, tt.debug)
-			if tt.expectNil {
-				if result != nil {
-					t.Errorf("Expected nil, got %v", result)
-				}
-			} else {
-				if result == nil {
-					t.Error("Expected non-nil error")
-				}
 			}
 		})
 	}

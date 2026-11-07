@@ -187,10 +187,3 @@ func slotIndex(fs *flag.FlagSet, v uint) uint32 {
 	}
 	return nvslot.ResolveNVRAMIndex(uint32(v))
 }
-
-// fail reports a failed command. The exit status is 0, as tpm2-kira's: a
-// failure here must not break the boot chain.
-func fail(err error) {
-	fmt.Fprintf(os.Stderr, "tpm2-kira-boot: FAILED: %v\n", err)
-	os.Exit(0)
-}
