@@ -221,7 +221,8 @@ func TestRefusedLockStopsBeforeThePrompt(t *testing.T) {
 	}
 	for _, c := range secretCommands {
 		out, err := run(c.args...)
-		if err != nil || !strings.Contains(out, "FAILED: nothing was asked") || !strings.Contains(out, "RLIMIT_MEMLOCK") {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(out, "FAILED: nothing was asked") || !strings.Contains(out, "RLIMIT_MEMLOCK") {
 			t.Errorf("%v under a limit: %v\n%s", c.args, err, out)
 		}
 		for _, prompt := range []string{"Password", "passphrase of", "Salt"} {
@@ -367,8 +368,11 @@ func TestPINFDOfTheRealBinary(t *testing.T) {
 			t.Errorf("--pin-fd=%s: %v\n%s", fd, err, out)
 		}
 	}
+	// A good descriptor is taken; the command then fails on what comes after it (no TPM here):
+	// exit 1, not the descriptor's 2.
 	out, err := runBinary(bin, nil, pipe("123456\n"), append(slices.Clone(approve), "--pin-fd", "3")...)
-	if err != nil || strings.Contains(out, "--pin-fd") || !strings.Contains(out, "FAILED") {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || strings.Contains(out, "--pin-fd") || !strings.Contains(out, "FAILED") {
 		t.Errorf("a good descriptor: %v\n%s", err, out)
 	}
 	if out, err := runBinary(bin, nil, pipe("123456\n"), append(slices.Clone(approve), "--pin-fd", "3", "--pin-fd", "3")...); err == nil || !strings.Contains(out, "given twice") {

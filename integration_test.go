@@ -407,9 +407,13 @@ func TestGlobalOptionsBeforeCommand(t *testing.T) {
 		}
 		return strings.TrimSpace(out.String())
 	}
-	// Slot 4, named before the command, is the only one read: it is empty.
-	if out := kira("--tpm="+tpmPath, "--nvram=4", "--debug", "slot", "info", "--json"); strings.Contains(out, `"slot_number": 3`) {
-		t.Fatalf("--nvram=4 before the command read slot 3: %q", out)
+	// Slot 4, named before the command, is the only one read: it is empty, so the command fails
+	// (exit 1) and says nothing of slot 3.
+	empty := exec.Command("./tpm2-kira", "--tpm="+tpmPath, "--nvram=4", "--debug", "slot", "info", "--json")
+	out, err := empty.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || strings.Contains(string(out), `"slot_number": 3`) {
+		t.Fatalf("--nvram=4 before the command: %v\n%s", err, out)
 	}
 	before := kira("--tpm", tpmPath, "--nvram", "3", "slot", "info", "--json")
 	after := kira("slot", "info", "--json", "--tpm", tpmPath, "--nvram", "3")
