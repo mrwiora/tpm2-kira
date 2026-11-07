@@ -497,9 +497,6 @@ func raw(fd int, onSignal func()) (func(), error) {
 	}.Take(fd)
 }
 
-// sgrAt is an SGR sequence at the start of a string.
-var sgrAt = regexp.MustCompile("^\x1b\\[[0-9;]*m")
-
 // wrap breaks lines at spaces to width (0: as they are), the colours not counted. A
 // broken line goes on at its own indentation, or at indent when that is more.
 func wrap(s string, width, indent int) string {
