@@ -57,7 +57,7 @@ Four levels, from seconds to a whole boot:
 |---|---|---|
 | unit | Go | the logic: blobs, policies, recipes, the board, the parsers |
 | integration | Go, swtpm, socat | the binaries against a software TPM: sealing, codes, run, the unlock socket, SSH |
-| the VM test (`tools/vmtest.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault, hibernation |
+| the VM test (`tools/vmtest.py`, its helpers in `tools/vmtestlib.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault, hibernation |
 | the phone against a VM (`tools/phone-vm-test.py`) | the VMs, the Android SDK's emulator, KVM | Marify's real BLE code and session against the real gate: enrolment, a phone salt's hand-over, boots attested in the initrd, the pepper typed through the phone's layout |
 | the acceptance run (`tools/acceptance.py`) | a machine you watch | the same install checks, with you at the console for the reboot |
 
