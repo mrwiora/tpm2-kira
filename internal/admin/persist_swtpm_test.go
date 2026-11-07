@@ -111,7 +111,7 @@ func TestSlotDeleteTakesTheSSHCA(t *testing.T) {
 	}
 	t.Setenv("TPM2_KIRA_CONTROL_CONF", conf)
 
-	if err := NVRAMDeleteCommand(sock, 0, true, false, false); err != nil {
+	if err := NVRAMDeleteCommand(sock, 0, true, false, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{caPath, caPath + ".pub"} {
@@ -119,7 +119,7 @@ func TestSlotDeleteTakesTheSSHCA(t *testing.T) {
 			t.Errorf("%s left: %v", p, err)
 		}
 	}
-	if err := NVRAMDeleteCommand(sock, 0, true, false, false); err == nil || !strings.Contains(err.Error(), "nothing of tpm2-kira") {
+	if err := NVRAMDeleteCommand(sock, 0, true, false, false, false); err == nil || !strings.Contains(err.Error(), "nothing of tpm2-kira") {
 		t.Fatalf("again: %v", err)
 	}
 }

@@ -173,7 +173,7 @@ func TestDecidePlan(t *testing.T) {
 	// Switched off, the next image leaves the server out, its network stays what control says.
 	off := in
 	off.Config = planConfig(t, "TPM2_KIRA_NET=dhcp\nTPM2_KIRA_SSH=off\n")
-	if q := decidePlan(off); q.Has(imageplan.PartSSH) || !strings.Contains(q.Part(imageplan.PartSSH).Why, "off (Network and SSH at boot)") {
+	if q := decidePlan(off); q.Has(imageplan.PartSSH) || !strings.Contains(q.Part(imageplan.PartSSH).Why, "off (Network & SSH)") {
 		t.Fatalf("SSH switched off: %+v", q.Part(imageplan.PartSSH))
 	}
 	approved := in.SSHCA

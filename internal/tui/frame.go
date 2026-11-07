@@ -21,9 +21,6 @@ func NewScreen(out io.Writer, colour bool, g Glyphs) *Screen {
 	return &Screen{out: out, colour: colour, glyphs: g}
 }
 
-// Glyphs is the set the screen's frames are drawn with.
-func (s *Screen) Glyphs() Glyphs { return s.glyphs }
-
 // Invalidate forgets what is on the terminal: the next Draw writes every row (after a
 // resize, Ctrl-L, or when something else wrote on it).
 func (s *Screen) Invalidate() { s.prev = nil }

@@ -15,7 +15,7 @@ import (
 	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
 )
 
-// Step 1, the boot chain: the hook, the route, and the way on to step 2,
+// The boot chain: the hook, the route, and the way on to the overview,
 // which opens once both are in place.
 func TestControlBootChain(t *testing.T) {
 	c := &controller{facts: machineFacts{TPM: "/dev/tpmrm0", SHA256Bank: true, LogSHA256: true, PCRs: "0e,2e,7e,11u"}}
@@ -54,7 +54,7 @@ func TestControlBootChain(t *testing.T) {
 		!strings.Contains(steps[2].Blocked, "Kernel command line adoption") || strings.Contains(steps[2].Blocked, "mkinitcpio") {
 		t.Fatalf("hook in, unrouted: %+v", steps)
 	}
-	// Routed: step 2 opens, the way on is the recommendation, the image
+	// Routed: the overview opens, the way on is the recommendation, the image
 	// out of date or not.
 	c.facts.Routed = map[string]bool{"/dev/sda2": true}
 	steps = c.chainSteps()
@@ -102,15 +102,15 @@ func wired() *controller {
 	return c
 }
 
-// Step 2: a line per submenu, each summing its options up; the options
+// The overview: a line per section, each summing its options up; the options
 // are greyed with the reason this machine cannot have them.
 func TestControlHub(t *testing.T) {
 	c := wired()
 	steps := c.hubSteps()
 	if len(steps) != 8 || steps[0].Key != "chain" || steps[0].Done != "in place" || steps[1].Key != "menu:keys" ||
 		steps[2].Key != "menu:phone" || steps[3].Key != "menu:disk" || steps[4].Key != "menu:remote" ||
-		steps[5].Key != "menu:tools" || steps[6].Key != "menu:reference" || steps[7].Key != "debug" {
-		t.Fatalf("step 2: %+v", steps)
+		steps[5].Key != "menu:image" || steps[6].Key != "menu:tools" || steps[7].Key != "menu:reference" {
+		t.Fatalf("the overview: %+v", steps)
 	}
 	if recommended(steps) != 1 || steps[1].Optional || !steps[2].Optional {
 		t.Fatalf("the keys lead: %d", recommended(steps))
@@ -132,15 +132,15 @@ func TestControlHub(t *testing.T) {
 		t.Fatalf("the TPM salt's step: %+v", disk[3])
 	}
 
-	// Step 1 not in place: every submenu waits for it. An image built
+	// The boot chain not in place: every section waits for it. An image built
 	// before the hook was in HOOKS is not that: it is rebuilt on leaving.
 	c.facts.Rebuild = "the image was built before sd-tpm2-kira was in HOOKS"
 	if steps := c.hubSteps(); steps[0].Done != "in place" {
-		t.Fatalf("an old image holds step 1 open: %+v", steps[0])
+		t.Fatalf("an old image holds the boot chain open: %+v", steps[0])
 	}
 	c.facts.Rebuild = ""
 	c.facts.Routed = map[string]bool{}
-	if steps := c.hubSteps(); steps[0].Done != "" || recommended(steps) != 0 || steps[1].Blocked != "needs step 1, the boot chain" {
+	if steps := c.hubSteps(); steps[0].Done != "" || recommended(steps) != 0 || steps[1].Blocked != "needs the boot chain" {
 		t.Fatalf("chain open: %+v", steps)
 	}
 	c.facts.Routed = map[string]bool{"/dev/sda2": true}
@@ -322,16 +322,16 @@ func TestControlShow(t *testing.T) {
 	c.out = &out
 	c.show()
 	got := out.String()
-	for _, want := range []string{"Step 1 of 2: the boot chain", "All prerequisites are met", "[x]\033[0m mkinitcpio adoption",
-		"Step 2 of 2: what this machine combines", "Signing key and TOTP codes", "    Signing key", "    Recovery: password and salt typed (0x1100)",
-		"Recommended next:\033[0m Signing key and TOTP codes > Signing key"} {
+	for _, want := range []string{"Boot chain", "All prerequisites are met", "[x]\033[0m mkinitcpio adoption",
+		"Overview: what this machine combines", "Keys & slots", "    Signing key", "    Recovery: password and salt typed (0x1100)",
+		"Recommended next:\033[0m Keys & slots > Signing key"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the screen lacks %q:\n%s", want, got)
 		}
 	}
-	// The way to step 2 is the menu's: step 2 follows on this screen.
-	if strings.Contains(got, "Continue to step 2") {
-		t.Errorf("a way to step 2 on the plain screen:\n%s", got)
+	// The way on to the overview is the menu's: the overview follows on this screen.
+	if strings.Contains(got, "Continue to the overview") {
+		t.Errorf("a way on to the overview on the plain screen:\n%s", got)
 	}
 	// A half-gone slot is red and recommended first.
 	c.facts.Keys = "local key files"
@@ -339,7 +339,7 @@ func TestControlShow(t *testing.T) {
 	out.Reset()
 	c.show()
 	if got := out.String(); !strings.Contains(got, "[!]") || !strings.Contains(got, "Slot 2  - dirty: the record counter left") ||
-		!strings.Contains(got, "Recommended next:\033[0m Signing key and TOTP codes > Slot 2") {
+		!strings.Contains(got, "Recommended next:\033[0m Keys & slots > Slot 2") {
 		t.Fatalf("the dirty screen:\n%s", got)
 	}
 }

@@ -116,7 +116,7 @@ func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 			t.Errorf("the output lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "secret-1234") || strings.Contains(got, "Looking at this machine") || strings.Contains(got, "Step 1 of 2") {
+	if strings.Contains(got, "secret-1234") || strings.Contains(got, "Looking at this machine") || strings.Contains(got, "Boot chain\n") {
 		t.Errorf("control said too much, or went on:\n%s", got)
 	}
 	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
@@ -126,7 +126,7 @@ func TestControlStopsOnAConfigThatDoesNotLoad(t *testing.T) {
 	// Fixed, control goes on, and the settings in the file are taken.
 	os.WriteFile(path, []byte("TPM2_KIRA_NET=dhcp\n"), 0o600)
 	out.Reset()
-	if err := Control(ControlOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Out: &out}); err != nil || !strings.Contains(out.String(), "Step 2 of 2") ||
+	if err := Control(ControlOptions{TPMPath: filepath.Join(t.TempDir(), "no-tpm"), Out: &out}); err != nil || !strings.Contains(out.String(), "Overview: what this machine combines") ||
 		!strings.Contains(out.String(), "Boot network Network at boot: DHCP") {
 		t.Fatalf("a good file: %v\n%s", err, out.String())
 	}

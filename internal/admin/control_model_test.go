@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,7 +36,7 @@ func TestControlAnnotate(t *testing.T) {
 		{controlStep{Key: "luks-salt", Done: "keyslot 1 of /dev/sda2"}, "tpm2-kira luks remove DEVICE --keyslot N", dangerDestroy},
 		{controlStep{Key: "phone-remove:0"}, "tpm2-kira phone unenrol --nvram 0", dangerDestroy},
 		{controlStep{Key: "salt-remove:0"}, "tpm2-kira phone salt unenrol --nvram 0", dangerDestroy},
-		{controlStep{Key: "delete-all"}, "tpm2-kira slot delete --yes", dangerDestroy},
+		{controlStep{Key: "delete-all"}, "tpm2-kira luks remove DEVICE --keyslot N (each of tpm2-kira's); tpm2-kira slot delete --yes --sweep; rm -r /etc/tpm2-kira /var/lib/tpm2-kira", dangerDestroy},
 		{controlStep{Key: "view:slot info --nvram 0"}, "tpm2-kira slot info --nvram 0", dangerView},
 		{controlStep{Key: "help:luks"}, "tpm2-kira help luks", dangerView},
 	} {
@@ -87,12 +89,30 @@ func TestConfirmDestroy(t *testing.T) {
 	if err := c.runRemoveSlot(0); !errors.Is(err, errKept) {
 		t.Fatalf("y deleted, or asked otherwise: %v", err)
 	}
+	// Delete everything: each of its parts asks for the word; without it nothing goes,
+	// a No to one part goes on with the next.
+	dir := t.TempDir()
+	defer func(old []string) { kiraDirs = old }(kiraDirs)
+	kiraDirs = []string{filepath.Join(dir, "etc"), filepath.Join(dir, "var")}
+	os.MkdirAll(kiraDirs[0], 0o700)
 	c = wired()
 	c.facts.Keys = "local key files"
 	c.facts.Status.Slots = []StatusSlot{{Slot: 0, PCRs: "0e,2e,7e,11u", Signed: true}}
-	answering(c, "\n")
+	out := answering(c, "\ny\n")
 	if err := c.deleteAllStep().Run(c); !errors.Is(err, errKept) {
 		t.Fatalf("delete everything without its word: %v", err)
+	}
+	if _, err := os.Stat(kiraDirs[0]); err != nil || !strings.Contains(out.String(), "2. The TPM") || !strings.Contains(out.String(), "3. The files") {
+		t.Fatalf("a part was taken without its word, or not asked:\n%s", out.String())
+	}
+	// The files' part, its word given (the TPM's not): the directory goes.
+	c.facts.TPMErr = "no TPM"
+	answering(c, "delete\n")
+	if err := c.deleteAllStep().Run(c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(kiraDirs[0]); !os.IsNotExist(err) {
+		t.Fatalf("the files stayed: %v", err)
 	}
 }
 
@@ -129,7 +149,7 @@ func TestControlSections(t *testing.T) {
 	}
 	for _, s := range c.sectionSteps("chain") {
 		if s.Menu == "hub" {
-			t.Error("the boot chain's section has the way on to step 2")
+			t.Error("the boot chain's section has the way on to the overview")
 		}
 	}
 }

@@ -262,6 +262,9 @@ same way where something of it remains:
 ```bash
 tpm2-kira slot delete              # everything tpm2-kira keeps (slots, TPM indices, the SSH CA): asks to type 'yes'
 tpm2-kira slot delete --yes        # the same, without asking
+tpm2-kira slot delete --yes --sweep   # and whatever else is at tpm2-kira's places, any version's, any shape:
+                                      # its NV range 0x01803000-0x01803FFF, aSSH's SSH CA handles
+                                      # 0x01802912-15, every EFI variable of its GUID, KIRAasshCA
 tpm2-kira slot delete --nvram 0    # one slot: its record and its indices in the TPM
 tpm2-kira slot delete --nvram 0 --force   # and an index of another shape at its places, without asking
 tpm2-kira luks remove /dev/sda2 --keyslot 1   # one LUKS keyslot of tpm2-kira's, with its token

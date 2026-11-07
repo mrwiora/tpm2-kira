@@ -24,9 +24,9 @@ import (
 // LUKS devices, the initramfs kind, the network interfaces), then at what
 // is configured already (the keys, the slots, the phone, the keyslots, the
 // route, the vault, the boot image's network and SSH server). It guides in
-// two steps. Step 1, the boot chain (control_bootchain.go): the
+// sections (control_model.go). The boot chain (control_bootchain.go): the
 // prerequisites, each judged, then the sd-tpm2-kira hook in the image and
-// the key's route on the kernel command line. Step 2 (control_hub.go): what the machine combines, in submenus -
+// the key's route on the kernel command line. The others (control_hub.go): what the machine combines -
 // the signing key with the TOTP codes, the phone, the ways the disk is
 // unlocked, the network and SSH at boot - each option greyed with the
 // reason while this machine cannot have it, and an option that needs
@@ -54,7 +54,7 @@ type ControlOptions struct {
 var emptyPassSeen = map[string]bool{}
 
 // A line of a screen: a step, an option of a submenu, or a submenu's
-// line on step 2 (Menu). Every populated slot is a line of its own, and
+// section's line on the overview (Menu). Every populated slot is a line of its own, and
 // picking it removes the slot whole (SelfConfirm: the step asks before it
 // acts, so no "run it again?" stands in front).
 type controlStep struct {
@@ -99,8 +99,8 @@ type controller struct {
 	p     *prompt.Prompter
 	tty   bool
 	facts machineFacts
-	// screen is what the overview shows: "chain" (step 1), "hub" (step 2)
-	// or one of step 2's submenus (controlMenus).
+	// screen is what the line menus show: "chain" (the boot chain), "hub" (the
+	// overview) or a section's key (controlSections).
 	screen string
 	// in is the terminal the full screen reads (default stdin); fast and slow
 	// collect the facts (default fastFacts, slowFacts): the tests' own.
@@ -161,8 +161,9 @@ func (c *controller) header() string {
 	return fmt.Sprintf("%s control %s - the protections of this machine, step by step", screen.Tag(screen.TagYellow), v)
 }
 
-// Control runs the guided workflow: step 1 until the boot chain is in
-// place, then step 2 and its submenus.
+// Control runs the guided workflow: the full screen where the terminal allows
+// it, else the line menus - the boot chain until it is in place, then the
+// overview and its sections.
 func Control(o ControlOptions) error {
 	c := &controller{o: o, out: o.Out}
 	if c.out == nil {
@@ -191,7 +192,7 @@ func Control(o ControlOptions) error {
 			fmt.Fprint(c.out, clearScreen+"\n\033[2mLooking at this machine ...\033[0m\n")
 		}
 		c.facts = c.look()
-		if c.screen == "" { // the start: step 1 until the boot chain is in place
+		if c.screen == "" { // the start: the boot chain until it is in place
 			c.screen = "hub"
 			if !chainDone(&c.facts) {
 				c.screen = "chain"
@@ -204,10 +205,10 @@ func Control(o ControlOptions) error {
 		steps := c.screenSteps()
 		fmt.Fprint(c.out, clearScreen+"\n"+c.header()+"\n  "+c.screenTitle()+"\n\n")
 		key, err := c.pick(steps)
-		// A submenu, or step 1 once the boot chain is in place (opened
-		// from step 2): Esc goes back to step 2. Elsewhere it leaves.
+		// A section, or the boot chain once it is in place (opened from
+		// the overview): Esc goes back to the overview. Elsewhere it leaves.
 		sub := c.screen != "hub" && (c.screen != "chain" || chainDone(&c.facts))
-		if err != nil && sub { // Esc: back to step 2
+		if err != nil && sub { // Esc: back to the overview
 			c.screen = "hub"
 			continue
 		}
@@ -243,8 +244,8 @@ func Control(o ControlOptions) error {
 	}
 }
 
-// screenSteps are the lines of the screen shown: step 1, step 2, or a
-// submenu of step 2 with its way back.
+// screenSteps are the lines of the screen shown: the boot chain, the overview,
+// or a section with its way back.
 func (c *controller) screenSteps() []controlStep {
 	switch c.screen {
 	case "chain":
@@ -252,18 +253,18 @@ func (c *controller) screenSteps() []controlStep {
 	case "hub":
 		return c.annotated(c.hubSteps())
 	}
-	return append(c.annotated(c.menuSteps(c.screen)), controlStep{Key: "back", Title: "Back to step 2", Optional: true, Menu: "hub"})
+	return append(c.annotated(c.menuSteps(c.screen)), controlStep{Key: "back", Title: "Back to the overview", Optional: true, Menu: "hub"})
 }
 
 // screenTitle names the screen, under the header.
 func (c *controller) screenTitle() string {
 	switch c.screen {
 	case "chain":
-		return "Step 1 of 2: the boot chain"
+		return "Boot chain"
 	case "hub":
-		return "Step 2 of 2: what this machine combines"
+		return "Overview: what this machine combines"
 	}
-	return "Step 2 of 2 > " + menuByKey(c.screen).title
+	return "Overview > " + sectionByKey(c.screen).title
 }
 
 // clearScreen is the terminal cleared, the cursor at the top.
@@ -332,9 +333,9 @@ func stepLabel(s controlStep) string {
 	return indent + amber("•") + " " + s.Title
 }
 
-// screenNote is the text above the menu: on step 1 the prerequisites,
-// on step 2 the machine's status, in a submenu what it is about; then the
-// recommendation, and on step 2 the status' notes.
+// screenNote is the text above the menu: on the boot chain the prerequisites,
+// on the overview the machine's status, in a section what it is about; then
+// the recommendation, and on the overview the status' notes.
 func (c *controller) screenNote(steps []controlStep) string {
 	head := c.headline(steps)
 	switch c.screen {
@@ -347,9 +348,9 @@ func (c *controller) screenNote(steps []controlStep) string {
 				head += "\n- " + n
 			}
 		}
-		return c.noteDescription() + "\n" + heading("Step 2") + "\n" + head
+		return c.noteDescription() + "\n" + heading("Overview") + "\n" + head
 	}
-	return menuByKey(c.screen).intro + "\n\n" + head
+	return sectionByKey(c.screen).intro + "\n\n" + head
 }
 
 // headline is the recommendation of a screen, or what the screen offers
@@ -417,10 +418,9 @@ func recommended(steps []controlStep) int {
 	return -1
 }
 
-// show draws both steps in plain text, the submenus' options under their
-// line of step 2: the prerequisites, the boot chain, the status, what
-// the machine combines, the recommendation (a script's look, and the
-// tests').
+// show draws everything in plain text, each section's options under its line
+// of the overview: the prerequisites, the boot chain, the status, what the
+// machine combines, the recommendation (a script's look, and the tests').
 func (c *controller) show() {
 	f := &c.facts
 	w := c.out
@@ -437,20 +437,20 @@ func (c *controller) show() {
 		fmt.Fprintln(w)
 	}
 	fmt.Fprintf(w, "\n%s\n\n", c.header())
-	fmt.Fprintln(w, "\033[1mStep 1 of 2: the boot chain\033[0m")
+	fmt.Fprintln(w, "\033[1mBoot chain\033[0m")
 	fmt.Fprint(w, c.prereqText())
 	fmt.Fprintln(w)
 	chain := c.chainSteps()
 	for _, s := range chain {
 		if s.Menu == "hub" {
-			continue // the way to step 2 on the screen; step 2 follows here
+			continue // the way on to the overview on the screen; it follows here
 		}
 		line(s, "")
 	}
 
 	fmt.Fprintln(w, "\n\033[1mWhat this machine has\033[0m")
 	fmt.Fprint(w, c.factsText())
-	fmt.Fprintln(w, "\n\033[1mStep 2 of 2: what this machine combines\033[0m")
+	fmt.Fprintln(w, "\n\033[1mOverview: what this machine combines\033[0m")
 	hub := c.hubSteps()
 	for _, s := range hub {
 		line(s, "")
@@ -463,9 +463,9 @@ func (c *controller) show() {
 
 	rec, why := "", ""
 	if n := recommended(chain); !chainDone(f) && n >= 0 {
-		rec, why = "Step 1 > "+chain[n].Title, chain[n].Explain
+		rec, why = "Boot chain > "+chain[n].Title, chain[n].Explain
 	} else if !chainDone(f) {
-		rec, why = "Step 1", "Nothing of the boot chain can be done yet: the prerequisites in red say what is missing."
+		rec, why = "Boot chain", "Nothing of the boot chain can be done yet: the prerequisites in red say what is missing."
 	} else if n := recommended(hub); n >= 0 {
 		rec, why = hub[n].Title, hub[n].Explain
 		if m := hub[n].Menu; m != "" && m != "chain" {

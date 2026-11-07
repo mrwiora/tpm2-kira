@@ -531,6 +531,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
 	yes := fs.Bool("yes", false, "delete: confirm deleting every slot (only needed without --nvram); an index of another shape stays")
 	force := fs.Bool("force", false, "delete: remove an index of another shape at tpm2-kira's own places, shown and not asked about")
+	sweep := fs.Bool("sweep", false, "delete, without --nvram: also everything else at tpm2-kira's places - other indices in its NV range (an earlier version's layout, another program's), aSSH's SSH CA indices, every EFI variable of its GUID - shown first, whatever its shape")
 
 	fs.Parse(args)
 
@@ -549,7 +550,7 @@ func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {
 		}
 	case "delete":
 		deleteIndex := resolveOrScanAll(uint32(*nvram), provided)
-		if err := admin.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *force, *debug); err != nil {
+		if err := admin.NVRAMDeleteCommand(*tpm, deleteIndex, *yes, *force, *sweep, *debug); err != nil {
 			fail(err)
 		}
 	default:
@@ -765,7 +766,7 @@ passphrase in its own keyslot opens the disk at cryptsetup's prompt.
                  vault and remove the keyslot by hand
 
 The image needs its network at boot: TPM2_KIRA_NET in control.conf
-(tpm2-kira control, "Network and SSH at boot").
+(tpm2-kira control, "Network & SSH").
 `
 
 // recipeFlags are a keyslot's recipe on the command line: where the

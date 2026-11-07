@@ -346,7 +346,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	if cfg, err := LoadControlConfig(controlConfigPath()); err == nil && cfg.Remote.Net.Mode == "off" {
 		fmt.Println()
 		fmt.Println("NOTE: the boot image has no network (TPM2_KIRA_NET=off), so it cannot reach the")
-		fmt.Println("      vault: turn it on in 'tpm2-kira control' (Network and SSH at boot) and")
+		fmt.Println("      vault: turn it on in 'tpm2-kira control' (Network & SSH) and")
 		fmt.Println("      rebuild the image.")
 	}
 	return key, slot, nil

@@ -11,7 +11,11 @@ spend code, tests or documentation on older versions of anything.
 - **No migration paths.** When a format, an NV index layout, a CLI flag or a
   unit changes, the old one is gone in the same change. No fallbacks, no
   "also accept the old name", no cleanup code for what earlier versions left
-  behind, no deprecation periods.
+  behind, no deprecation periods. One removal is not a migration: by place,
+  not by format - `slot delete --yes --sweep` (and control's "Delete
+  everything") takes whatever is in tpm2-kira's NV range, at aSSH's SSH CA
+  handles and under tpm2-kira's EFI GUID, shown first, reading nothing of what
+  it finds (the owner, 2026-11-07).
 - **No compatibility with older or newer builds of tpm2-kira itself.** Do not
   design a change so that a previous build keeps working with new data, or
   the other way round.

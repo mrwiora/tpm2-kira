@@ -55,7 +55,7 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 		case len(keyslots) == 0:
 			st.Dirty = desc + ", but no keyslot uses it: picking it offers to take the vault out of the slot"
 		case f.Remote.Net.Mode == "off":
-			st.Dirty = desc + ", but the boot image has no network to reach the vault (Network and SSH at boot)"
+			st.Dirty = desc + ", but the boot image has no network to reach the vault (Network & SSH)"
 		case f.Checking:
 			st.Done = desc + " - asking the vault ..."
 		case !v.Answers:
@@ -72,7 +72,7 @@ func (c *controller) vaultStep(gate string, strong *StatusSlot) controlStep {
 	case f.Keys == "":
 		st.Blocked = "needs the signing key"
 	case strong == nil:
-		st.Blocked = "needs slot 0 (Signing key and TOTP codes)"
+		st.Blocked = "needs slot 0 (Keys & slots)"
 	case f.Initramfs != "mkinitcpio" && f.Initramfs != "initramfs-tools":
 		st.Blocked = "the boot image's network is built with mkinitcpio or initramfs-tools only"
 	case f.Wired == 0 && f.Remote.Net.Mode == "off":
@@ -100,7 +100,7 @@ func (c *controller) runVault() error {
 	}
 	if f.Remote.Net.Mode == "off" {
 		ok, err := c.confirmYes("The boot image needs a network to reach the vault. Set it up now?",
-			"The image's own network (DHCP or a static address), written into "+controlConfigPath()+" - the same as Network and SSH at boot.")
+			"The image's own network (DHCP or a static address), written into "+controlConfigPath()+" - the same as Network & SSH.")
 		if err != nil {
 			return err
 		}
@@ -230,7 +230,7 @@ func (c *controller) runVault() error {
 			Name: name, Pepper: pepper, Yes: true, SecureBootSaid: true, Debug: c.o.Debug}}); err != nil {
 		return err
 	}
-	fmt.Fprintln(c.out, "The vault's line on step 2 says, at every look, whether it still answers and knows this device.")
+	fmt.Fprintln(c.out, "The vault's line in Disk unlock says, at every look, whether it still answers and knows this device.")
 	return nil
 }
 

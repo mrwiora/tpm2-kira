@@ -116,13 +116,6 @@ type machineFacts struct {
 	Remote   RemoteConfig   // the boot image's network and SSH server (control.conf)
 }
 
-// collectFacts is the analysis.
-func collectFacts(tpmPath string, debug bool) machineFacts {
-	f := fastFacts(tpmPath, debug)
-	slowFacts(&f)
-	return f
-}
-
 // slowFacts are what takes seconds: each vault asked (up to 5 s), each keyslot's
 // passphrase tried empty (a key derivation each, cached for the run). The full screen
 // shows the rest first, with these "checking".

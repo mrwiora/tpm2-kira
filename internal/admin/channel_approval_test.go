@@ -42,7 +42,7 @@ func TestStatusSaysTheChannel(t *testing.T) {
 	}
 }
 
-// Control: a moved channel is a red line of step 2 that seals it when picked.
+// Control: a moved channel is a red line of Keys & slots that seals it when picked.
 func TestControlShowsTheMovedChannel(t *testing.T) {
 	c := &controller{out: &strings.Builder{}}
 	c.facts.Status.Slots = []StatusSlot{{Slot: 4, Signed: true, ChannelMoved: true, PCRs: "7"}}
@@ -61,7 +61,7 @@ func TestControlShowsTheMovedChannel(t *testing.T) {
 		hub = hub || strings.Contains(s.Dirty, "phone channel")
 	}
 	if !hub {
-		t.Errorf("step 2 does not show it: %+v", c.hubSteps())
+		t.Errorf("the overview does not show it: %+v", c.hubSteps())
 	}
 	if step.Dirty == "" || !strings.Contains(step.Dirty, "seal it again") || step.Run == nil {
 		t.Errorf("its line: %+v", step)

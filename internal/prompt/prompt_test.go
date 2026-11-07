@@ -229,10 +229,10 @@ func TestConfirmFromAPipe(t *testing.T) {
 
 func TestWait(t *testing.T) {
 	p, out := pipe("\n")
-	if err := p.Wait("Back to step 2", "", "OK"); err != nil {
+	if err := p.Wait("Back to the overview", "", "OK"); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "Back to step 2 [Enter: OK] " {
+	if out.String() != "Back to the overview [Enter: OK] " {
 		t.Fatalf("%q", out)
 	}
 	if err := p.Wait("Back", "", "OK"); !errors.Is(err, ErrCancelled) {
