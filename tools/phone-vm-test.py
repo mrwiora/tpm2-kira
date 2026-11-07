@@ -13,7 +13,7 @@ What it does:
      Bluetooth medium (netsimd) with a raw HCI socket (-netsim-args --hci-port); installs the APKs
      with their Bluetooth permissions
   3. runs tools/vmtest.py --only setup,phone --phone SERIAL on each target in turn, with
-     LOCALVM_BT set: every start of the VM (tools/localvm.py) connects its ttyS1 to that socket,
+     LOCALVM_BT set: every start of the VM (tools/localvm.py) connects its ttyS2 to that socket,
      and the scenario phone makes it an adapter (btattach) in the system and in the boot image
   4. stops the emulator and the VM; the VM's snapshots fresh and export are not touched
 
@@ -202,7 +202,7 @@ def main():
         emu.start()
         emu.install(apks)
         for t in targets:
-            say(f"\n== {t}: tools/vmtest.py --only setup,phone, its ttyS1 on the emulator's Bluetooth")
+            say(f"\n== {t}: tools/vmtest.py --only setup,phone, its ttyS2 on the emulator's Bluetooth")
             env = dict(os.environ, LOCALVM_BT=str(a.hci_port))
             cmd = [sys.executable, os.path.join(REPO, "tools", "vmtest.py"), "--config", VM_CONFIG, "--target", t,
                    "--only", "setup,phone", "--phone", emu.serial, "--run-dir", os.path.join(run_dir, t)]

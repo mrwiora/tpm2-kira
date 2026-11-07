@@ -1869,21 +1869,21 @@ class Machine:
     PHONE_PEPPER = "vmtest7phone"
 
     def phone_guest(self):
-        """The test's own Bluetooth on the machine, never a package's: ttyS1 is the emulator's
+        """The test's own Bluetooth on the machine, never a package's: ttyS2 is the emulator's
         simulated Bluetooth (netsimd's HCI socket, tools/localvm.py --bt), made an adapter by btattach
         in the running system and in the boot image; bluetoothd masked, as the gate takes the adapter
         whole."""
         unit = """[Unit]
-Description=vmtest: the emulator's simulated Bluetooth on ttyS1 (tools/phone-vm-test.py)
+Description=vmtest: the emulator's simulated Bluetooth on ttyS2 (tools/phone-vm-test.py)
 DefaultDependencies=no
-Requires=dev-ttyS1.device
-After=dev-ttyS1.device
+Requires=dev-ttyS2.device
+After=dev-ttyS2.device
 Conflicts=initrd-switch-root.target shutdown.target
 Before=initrd-switch-root.target shutdown.target
 
 [Service]
 ExecStartPre=-/usr/bin/modprobe hci_uart
-ExecStart=/usr/bin/btattach -B /dev/ttyS1 -P h4
+ExecStart=/usr/bin/btattach -B /dev/ttyS2 -P h4
 
 [Install]
 WantedBy=sysinit.target
@@ -1904,7 +1904,7 @@ WantedBy=sysinit.target
             head = 'PREREQ=""\nprereqs() { echo "$PREREQ"; }\ncase "$1" in prereqs) prereqs; exit 0;; esac\n'
             files = {"/usr/lib/systemd/system/kira-test-btattach.service": unit,
                      "/etc/initramfs-tools/hooks/kira-test-btattach": "#!/bin/sh\n" + head + ". /usr/share/initramfs-tools/hook-functions\ncopy_exec /usr/bin/btattach /usr/bin\nmanual_add_modules hci_uart\n",
-                     "/etc/initramfs-tools/scripts/init-premount/kira-test-btattach": "#!/bin/sh\n" + head + "modprobe hci_uart\n/usr/bin/btattach -B /dev/ttyS1 -P h4 >/dev/null 2>&1 &\n",
+                     "/etc/initramfs-tools/scripts/init-premount/kira-test-btattach": "#!/bin/sh\n" + head + "modprobe hci_uart\n/usr/bin/btattach -B /dev/ttyS2 -P h4 >/dev/null 2>&1 &\n",
                      "/etc/initramfs-tools/scripts/init-bottom/kira-test-btattach": "#!/bin/sh\n" + head + "kill $(pidof btattach) 2>/dev/null || true\n"}
             hook = "true"
         script = "set -e; " + pkg + " >/tmp/kira-test-bt.log 2>&1; "
@@ -1916,7 +1916,7 @@ WantedBy=sysinit.target
         script += f"{hook}; systemctl disable --now bluetooth.service 2>/dev/null || true; systemctl mask bluetooth.service; "
         script += "systemctl enable --now kira-test-btattach.service; sleep 3; ls /sys/class/bluetooth"
         rc, out = self.run(script + " 2>&1", save="phone-guest.log")
-        self.check("phone: the simulated Bluetooth is an adapter (btattach on ttyS1)", rc == 0 and "hci" in out, out[-500:])
+        self.check("phone: the simulated Bluetooth is an adapter (btattach on ttyS2)", rc == 0 and "hci" in out, out[-500:])
 
     def phone_keyboard(self):
         """Marify on the emulator over the simulated Bluetooth, its real BLE code against the real
@@ -1984,22 +1984,21 @@ WantedBy=sysinit.target
             st = ph.start("attest", 300, approve="changed" if boot == 1 else None)
             s = self.boot_session(f"phone-{boot}")
             try:
-                text, m = s.expect(r"mobile attestation - phone code (\S+) \(the phone must show the same\)", 300)
-                screen = re.sub(r"\D", "", m.group(1))
-                phone_code = re.sub(r"\D", "", st.value("code", 120) or "")
-                state = st.value("state", 5)
-                self.check(f"phone boot {boot}: the phone's code is the boot screen's ({state})", screen != "" and screen == phone_code, f"screen {screen!r}, phone {phone_code!r}")
                 ok, out = st.wait(300)
                 vals = st.values()
                 self.log.save(f"phone-boot-{boot}-values.txt", "\n".join(f"{k}={v}" for k, v in vals.items() if k != "layout"))
-                if not self.check(f"phone boot {boot}: the phone's session passed and it shows a layout of the 36 keys", ok and len(vals.get("layout", "")) == 36 and vals.get("layout_keys") == "abcdefghijklmnopqrstuvwxyz0123456789", out[-400:]):
+                # The first boot of the image the enrolment rebuilt may be changed (approved and
+                # remembered); the second matches.
+                want = ("changed", "match") if boot == 1 else ("match",)
+                self.check(f"phone boot {boot}: the phone attested the initrd ({vals.get('state')}, its boot key proved: a code of {len(vals.get('code', ''))} digits)",
+                           ok and vals.get("state", "").lower() in want and len(vals.get("code", "")) == 9, f"{ {k: v for k, v in vals.items() if k != 'layout'} } {out[-300:]}")
+                if not self.check(f"phone boot {boot}: the phone shows a layout of the 36 keys", len(vals.get("layout", "")) == 36 and vals.get("layout_keys") == "abcdefghijklmnopqrstuvwxyz0123456789", str({k: v for k, v in vals.items() if k != "layout"})):
                     raise Fail("no layout from the phone")
                 layout = dict(zip(vals["layout_keys"], vals["layout"]))
                 layouts.append(vals["layout"])
-                s.expect(r"mobile attestation passed", 120)
-                s.expect(r"Does the code match your authenticator\?.*$", 120)
-                s.send("\r")
+                # The phone's verdict ends the code screen: nothing is pressed here.
                 text, _ = s.expect(r"Password for disk \S+: ?$", 300)
+                self.check(f"phone boot {boot}: the code screen ends on the phone's verdict, with no key pressed", "Confirmed." in text, text[-600:])
                 self.check(f"phone boot {boot}: the prompt says to type the pepper through the phone's layout", "layout your phone shows" in text, text[-500:])
                 s.send(self.PHONE_PASSWORD + "\r")
                 s.expect(r"Pepper for disk \S+: ?$", 60)

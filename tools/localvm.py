@@ -127,8 +127,8 @@ class Machine:
     def start(self, unlock=True, timeout=600, tpm=True, bt=None):
         """Starts the machine; tpm=False without its TPM (a boot whose
         close must fail: hibernatetest's V4). bt: the TCP port of a raw HCI
-        socket (netsimd's --hci-port), the guest's second serial port
-        (ttyS1), which 'btattach -B /dev/ttyS1 -P h4' makes an adapter
+        socket (netsimd's --hci-port), the guest's COM3 (ttyS2), which
+        'btattach -B /dev/ttyS2 -P h4' makes an adapter
         (tools/phone-vm-test.py); qemu reconnects until it answers. Without
         it, $LOCALVM_BT."""
         if self.pid():
@@ -151,7 +151,9 @@ class Machine:
             btdev = []
             bt = bt or os.environ.get("LOCALVM_BT")  # tools/phone-vm-test.py: every start of a run, resets too
             if bt:
-                btdev = ["-chardev", f"socket,id=bt0,host=127.0.0.1,port={int(bt)},reconnect-ms=1000", "-serial", "chardev:bt0"]
+                # COM3 (ttyS2), not the second -serial: the firmware prints its console to COM1 and
+                # COM2, which the HCI socket would take for packets (netsimd: invalid H4).
+                btdev = ["-chardev", f"socket,id=bt0,host=127.0.0.1,port={int(bt)},reconnect-ms=1000", "-device", "isa-serial,chardev=bt0,index=2"]
             self.mark = os.path.getsize(self.path("serial.log")) if os.path.exists(self.path("serial.log")) else 0
             machine, code, secure = "q35,accel=kvm", OVMF_CODE, []
             if self.secure_boot:
@@ -393,7 +395,7 @@ def main():
     p.add_argument("--no-unlock", action="store_true")
     p.add_argument("--overwrite", action="store_true", help="snapshot: replace fresh or export, which every run depends on")
     p.add_argument("--timeout", type=int, default=600)
-    p.add_argument("--bt", type=int, help="start: the guest's ttyS1 to this raw HCI TCP port (netsimd --hci-port)")
+    p.add_argument("--bt", type=int, help="start: the guest's ttyS2 (COM3) to this raw HCI TCP port (netsimd --hci-port)")
     a = p.parse_args()
     cfg = configparser.ConfigParser()
     if not cfg.read(a.config):
