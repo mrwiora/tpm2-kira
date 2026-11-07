@@ -1961,15 +1961,6 @@ func TestGenerateHOTPSHA256(t *testing.T) {
 	}
 }
 
-// TestFormatKIRAOutput tests KIRA output formatting
-func TestFormatKIRAOutput(t *testing.T) {
-	// Just ensure it doesn't panic
-	output := totp.FormatKIRAOutput("test message")
-	if output == "" {
-		t.Error("Expected non-empty output")
-	}
-}
-
 // TestFormatKIRAError tests KIRA error formatting
 func TestFormatKIRAError(t *testing.T) {
 	// Test with a basic error
@@ -2064,51 +2055,6 @@ func TestHandleNVRAMNotFoundError(t *testing.T) {
 				if result == nil {
 					t.Error("Expected non-nil error")
 				}
-			}
-		})
-	}
-}
-
-func TestHasValidSlots(t *testing.T) {
-	tests := []struct {
-		name     string
-		slots    []totp.NVRAMSlot
-		expected bool
-	}{
-		{
-			name:     "Empty slots",
-			slots:    []totp.NVRAMSlot{},
-			expected: false,
-		},
-		{
-			name: "All errors",
-			slots: []totp.NVRAMSlot{
-				{Error: fmt.Errorf("error")},
-			},
-			expected: false,
-		},
-		{
-			name: "One valid slot",
-			slots: []totp.NVRAMSlot{
-				{Code: "123456"},
-			},
-			expected: true,
-		},
-		{
-			name: "Mixed",
-			slots: []totp.NVRAMSlot{
-				{Error: fmt.Errorf("error")},
-				{Code: "123456"},
-			},
-			expected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := totp.HasValidSlots(tt.slots)
-			if result != tt.expected {
-				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
 		})
 	}

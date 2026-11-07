@@ -50,7 +50,6 @@ THE SLOT (a boot state your signing key approved; what control runs)
                keyslots, and what does not fit together
 
 WHO CHECKS THE BOOT
-  reveal       The code of a slot's TOTP key (reveal-plain: without colour)
   phone        enrol, unenrol, status, gate, ekcert, quote, verify: the
                Marify app verifies this boot over Bluetooth LE, in place of
                the code; salt enrol|rotate|status|unenrol: the phone keeps
@@ -117,9 +116,6 @@ ssh-child | gate-child; docs/ and README.md
 // there is none.
 func printHelp(topic string) {
 	topic = strings.TrimPrefix(topic, "--")
-	if topic == "reveal-plain" {
-		topic = "reveal"
-	}
 	if page, ok := helpPages[topic]; ok {
 		fmt.Print(page)
 		return
@@ -426,14 +422,6 @@ slot, a slot that needs an approval. Root for the LUKS headers.
   --conf PATH         The configuration file (default ` + admin.DefaultControlConfigPath + `)
 `,
 
-	"reveal": `tpm2-kira reveal [--nvram N]          tpm2-kira reveal-plain [--nvram N]
-
-The current code of a slot, in the coloured KIRA format or plain. The TPM
-computes it under the slot's policy: in a boot the signing key approved,
-before the OS separator and before the boot image's close (PCR 15: after it
-there is no code until the next boot).
-`,
-
 	"run": `tpm2-kira-boot run [--plan DIR] [--hold S] [--unlock SOCKET] [--ssh [--ssh-conf PATH] ...]
 
 What the initramfs runs, the same on Arch and Debian: shows the code of
@@ -721,7 +709,7 @@ cryptsetup's prompt is always the last way in (docs/PLAN-LUKS.md).
 The YubiKeys plugged in and the keys in their PIV slots, and which of them
 tpm2-kira can use as the signing key. Read-only; no PIN. With the signing
 key on a YubiKey, slot add and slot approve need the token and its PIN (see
-'help slot'); reveal, run and info never do.
+'help slot'); run and info never do.
 `,
 
 	"pcrtips": `tpm2-kira pcrtips

@@ -108,7 +108,7 @@ func TestCodeBeforeTheSeparatorThenLocked(t *testing.T) {
 	}
 	slots := totp.ScanNVRAMSlot(tpm, nvslot.NVRAMSlotStart, false)
 	if len(slots) != 1 || !errors.Is(slots[0].Error, measure.ErrSeparatorLocked) {
-		t.Fatalf("reveal should report the lock: %+v", slots)
+		t.Fatalf("the scan should report the lock: %+v", slots)
 	}
 	if line := totp.SlotErrorLine(slots[0].Error); line != "Locked until the next boot (the OS separator ran after the measure point)" {
 		t.Fatalf("line %q", line)

@@ -71,9 +71,10 @@ If no firmware line appears: power the machine off (a cold start loads the
 firmware and logs it), boot, and rebuild with `mkinitcpio -P`. More in
 [DEBUG-BLE.md](DEBUG-BLE.md).
 
-**Debug output:**
+**Debug output** (the codes themselves are only on the boot's code screen; with
+"Debug at boot" in `control` the boot's log says every step):
 ```bash
-tpm2-kira --debug reveal
+tpm2-kira --debug slot info
 ```
 
 **Check current PCR values vs. sealed values:**

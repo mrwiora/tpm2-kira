@@ -16,19 +16,8 @@ import (
 	"rsc.io/qr"
 )
 
-// ANSI color codes for KIRA output
-const (
-	KIRASuccess = "\033[1;33mKIRA\033[0m" // Yellow KIRA for success
-	KIRAError   = "\033[0;31mKIRA\033[0m" // Red KIRA for errors
-	KIRANormal  = "KIRA"                  // Plain KIRA for no color
-)
-
-// FormatKIRAOutput formats output with colored KIRA prefix and timestamp
-func FormatKIRAOutput(code string) string {
-	now := time.Now().UTC()
-	timestamp := now.Format("15:04:05")
-	return fmt.Sprintf("[ %s ] %s: %s", KIRASuccess, timestamp, code)
-}
+// KIRAError is the red KIRA tag of an error line.
+const KIRAError = "\033[0;31mKIRA\033[0m"
 
 // FormatKIRAError formats error output with red KIRA prefix and timestamp
 func FormatKIRAError(err error) string {

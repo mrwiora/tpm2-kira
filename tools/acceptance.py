@@ -502,11 +502,7 @@ cd /; rm -rf "$d"
     if out.strip().endswith("/etc/tpm2-kira/pin"):
         rep.check("the PIN file is root's, mode 600", out.strip().endswith("root 600 /etc/tpm2-kira/pin"), out.strip().split("\n")[-1])
 
-    # The codes this boot shows, for the comparison after the reboot.
-    rc, out = t.run("for s in 0 1; do echo \"slot $s: $(tpm2-kira reveal-plain --nvram $s 2>&1 | tail -1)\"; done", root=True)
-    log.save("codes-before-reboot.txt", out)
-    log.say("codes now (closed after boot is expected: the close, PCR 15, ran):")
-    log.say(out.rstrip())
+    # The codes are on the next boot's code screen: none on the running system, which is closed.
 
 
 def ensure_luks(t, mode_wanted, luks_device, log, rep):

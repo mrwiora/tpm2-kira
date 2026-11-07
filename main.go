@@ -18,7 +18,6 @@ import (
 	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 	"github.com/tpm2-trust/tpm2-kira/internal/signing"
-	"github.com/tpm2-trust/tpm2-kira/internal/totp"
 	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 	"github.com/tpm2-trust/tpm2-kira/internal/vaultkey"
 )
@@ -155,8 +154,8 @@ func main() {
 	n := globalArgs(os.Args[1:])
 	globalFlags.Parse(os.Args[1 : 1+n])
 
-	// Without a command: 'reveal'.
-	command := "reveal"
+	// Without a command: the overview.
+	command := "help"
 	commandArgs := os.Args[1+n:]
 	if len(commandArgs) > 0 {
 		command, commandArgs = commandArgs[0], commandArgs[1:]
@@ -200,10 +199,6 @@ func main() {
 		if err := admin.Status(admin.StatusOptions{TPMPath: *tpm, PubKeyPath: *pubKey, ConfigPath: *conf, JSON: *jsonOut, Debug: *dbg}); err != nil {
 			fail(err)
 		}
-	case "reveal":
-		runReveal(commandArgs, *tpmPath, *debug)
-	case "reveal-plain":
-		runRevealPlain(commandArgs, *tpmPath, *debug)
 	case "phone":
 		runPhone(commandArgs, *tpmPath, *debug)
 	case "vault":
@@ -523,34 +518,6 @@ func runSlotInfo(args []string, tpmPath string, debugFlag bool) {
 	if err := admin.InfoCommand(*tpm, scanIndex, *pubKeyPath, *debug, *jsonOutput); err != nil {
 		fail(err)
 	}
-}
-
-func runReveal(args []string, tpmPath string, debugFlag bool) {
-	fs := flag.NewFlagSet("reveal", flag.ExitOnError)
-
-	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
-	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-
-	fs.Parse(args)
-
-	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
-
-	totp.RevealCommand(*tpm, scanIndex, *debug, false)
-}
-
-func runRevealPlain(args []string, tpmPath string, debugFlag bool) {
-	fs := flag.NewFlagSet("reveal-plain", flag.ExitOnError)
-
-	tpm := fs.String("tpm", tpmPath, "Path to TPM device")
-	nvram := fs.Uint("nvram", nvramDefault(nvslot.NVRAMSlotStart), "TPM NVRAM index")
-	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-
-	fs.Parse(args)
-
-	scanIndex := resolveOrScanAll(uint32(*nvram), nvramExplicit(args))
-
-	totp.RevealCommand(*tpm, scanIndex, *debug, true)
 }
 
 func runSlotNVRAM(args []string, tpmPath string, debugFlag bool) {

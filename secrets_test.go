@@ -66,7 +66,7 @@ func TestHoldsSecrets(t *testing.T) {
 			t.Errorf("%v does not lock its memory", c.args)
 		}
 	}
-	for _, args := range [][]string{{"status"}, {"slot", "info"}, {"reveal"}, {"reveal-plain"}, {"version"}, {"help"}, {"pcrtips"}, {"yubikey", "list"}, {"slot", "list"}, {"slot", "status"}, {"slot", "delete"},
+	for _, args := range [][]string{{"status"}, {"slot", "info"}, {"version"}, {"help"}, {"pcrtips"}, {"yubikey", "list"}, {"slot", "list"}, {"slot", "status"}, {"slot", "delete"},
 		{"luks", "status"}, {"luks", "mark"}, {"luks", "route"}, {"vault", "status"}, {"phone", "status"}, {"phone", "quote"}, {"phone", "verify"}, {"phone", "ekcert"},
 		{"phone", "salt", "status"}, {"phone"}, {"phone", "salt"}, {"slot"}, {"luks"}, {"vault"}, {"initramfs", "plan"}} {
 		if holdsSecrets(args[0], args[1:]) {
@@ -231,7 +231,7 @@ func TestRefusedLockStopsBeforeThePrompt(t *testing.T) {
 		}
 	}
 	// Who holds nothing secret is not stopped.
-	for _, args := range [][]string{{"luks", "status", "/nonexistent"}, {"slot", "list"}, {"slot", "info"}, {"status"}, {"reveal"}} {
+	for _, args := range [][]string{{"luks", "status", "/nonexistent"}, {"slot", "list"}, {"slot", "info"}, {"status"}} {
 		if out, _ := run(args...); strings.Contains(out, "nothing was asked") {
 			t.Errorf("%v: %s", args, out)
 		}
@@ -307,7 +307,7 @@ func TestPINFDOnEveryCommand(t *testing.T) {
 			t.Errorf("%v says it exits 0:\n%s", c.args, out)
 		}
 	}
-	for _, args := range [][]string{{"status"}, {"reveal"}, {"slot", "list"}, {"slot", "delete"}, {"luks", "status"}, {"luks", "mark"}, {"vault", "status"}, {"phone", "status"}} {
+	for _, args := range [][]string{{"status"}, {"slot", "list"}, {"slot", "delete"}, {"luks", "status"}, {"luks", "mark"}, {"vault", "status"}, {"phone", "status"}} {
 		if out, _ := runBinary(bin, nil, nil, append(slices.Clone(args), "--pin-fd", "99")...); !strings.Contains(out, "not defined: -pin-fd") {
 			t.Errorf("%v takes --pin-fd:\n%s", args, out)
 		}

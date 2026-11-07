@@ -309,8 +309,8 @@ class Hib:
         out = self.agent_probe(tag)
         self.check(f"{tag}: a certificate asked of the CA after the resume is refused (closed)",
                    "TEMPORARY" in out and "the CA is closed" in out and "through slot" not in out, out[-600:])
-        rc, out = self.run("tpm2-kira reveal-plain --nvram 0 2>&1 | tail -2", save=f"{tag}-reveal.log")
-        self.check(f"{tag}: slot 0's TOTP key refuses after the resume (closed)", "Closed until the next boot" in out, out.strip())
+        rc, out = self.run("tpm2-kira slot info --nvram 0 2>&1", save=f"{tag}-slot-info.log")
+        self.check(f"{tag}: slot 0 is closed after the resume (PCR 15)", "closed until the next boot" in out, out.strip()[-400:])
         self.m.rep.issues.append(f"{tag}: the TPM's restartCount {before['restart']} -> {st['restart']}, "
                                  f"resetCount {before['reset']} -> {st['reset']} (a resume from hibernation is a TPM "
                                  f"{'Restart' if st['restart'] and st['restart'] != before['restart'] else 'Reset'})")

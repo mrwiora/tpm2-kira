@@ -20,7 +20,6 @@ import (
 	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 	"github.com/tpm2-trust/tpm2-kira/internal/phonegate"
 	"github.com/tpm2-trust/tpm2-kira/internal/sshscreen"
-	"github.com/tpm2-trust/tpm2-kira/internal/totp"
 	"github.com/tpm2-trust/tpm2-kira/internal/tpmdev"
 
 	"github.com/tpm2-trust/assh/sandbox"
@@ -40,7 +39,6 @@ scripts run it; on the installed system it is 'tpm2-kira')
                resume from hibernation)
   unlock-key   Debian's keyscript: the disk's key from run's socket, else askpass
   machine-id   Release the sealed machine-id before the network (slot 0's policy)
-  reveal       The current code (reveal-plain: without colour)
   ssh-child    The SSH server's unprivileged half, started by run
   gate-child   The phone's radio worker, started by run
   version      The version
@@ -144,13 +142,6 @@ func main() {
 		default:
 			journal.Narrate("tpm2-kira: no sealed machine-id")
 		}
-	case "reveal", "reveal-plain":
-		fs := flag.NewFlagSet(command, flag.ExitOnError)
-		tpm := fs.String("tpm", tpmdev.DefaultPath, "Path to TPM device")
-		nvram := fs.Uint("nvram", 0, "A slot, 0-15, or a full NV index (default: every populated slot)")
-		debug := fs.Bool("debug", false, "Enable debug output")
-		fs.Parse(args)
-		totp.RevealCommand(*tpm, slotIndex(fs, *nvram), *debug, command == "reveal-plain")
 	default:
 		fmt.Fprintf(os.Stderr, "tpm2-kira-boot: unknown command %q\n\n%s", command, usage)
 		os.Exit(2)

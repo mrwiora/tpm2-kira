@@ -41,7 +41,7 @@ That order is what locks the key for the rest of the boot. PCR extends are
 one-way, so once the separator has run, nothing in the booted system can
 satisfy the key's policy again — not root, not malware — until the next boot.
 The key never leaves the TPM; the display holds nothing but the code it is
-showing, good for 30 seconds. `tpm2-kira reveal` on a running system reports the
+showing, good for 30 seconds. `slot info` on a running system reports the
 slot as *closed until the next boot*, which is the intended state: on top of
 the separator, `run` closes the boot at the end of the code screen (PCR 15
 extended), and every slot object's own policy requires PCR 15 to be zero,
@@ -122,7 +122,8 @@ separate secrets or selections:
 ```bash
 tpm2-kira slot add --nvram 2
 tpm2-kira slot add --nvram 3 --pcrs "0e,2e,7e"
-
-tpm2-kira reveal --nvram 0
-tpm2-kira reveal --nvram 1
 ```
+
+`slot add` shows a new slot's first code while this boot is not closed yet, in
+practice before the first boot through the image; otherwise compare the first
+code at the next boot's code screen.

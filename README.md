@@ -75,7 +75,7 @@ Everything but the help needs root. `tpm2-kira help` is one screen, `tpm2-kira h
 |---|---|
 | Guided | `control` |
 | The slot | `setup` · `slot add\|approve\|info\|list\|status\|delete` · `status` |
-| Who checks the boot | `reveal` · `phone ...` |
+| Who checks the boot | the code screen at boot · `phone ...` |
 | The disk's key | `luks ...` · `phone salt ...` · `vault ...` |
 | The boot image | `initramfs plan`; in the image `tpm2-kira-boot`: `run`, `close`, `machine-id`, `unlock-key`, `ssh-child`, `gate-child` |
 | By hand | `yubikey list` · `pcrtips` · `version` |

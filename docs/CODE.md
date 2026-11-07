@@ -34,9 +34,10 @@ disk's key is asked ([DISK-KEY.md](DISK-KEY.md)). Without Enter the boot
 continues by itself after 90 seconds. The same screen can be had over SSH
 ([SSH.md](SSH.md)).
 
-On the running system, `tpm2-kira reveal` (`reveal-plain` without colour)
-shows a slot's code - only before the close, so in practice only in the
-initrd.
+No command shows a code on the running system: the boot is closed by then
+(below). The one exception is the boot before the first one through the
+image: `slot add` shows a new slot's first code there, to compare with the
+authenticator; otherwise the first code is on the next boot's screen.
 
 ## The close
 
@@ -62,7 +63,7 @@ whatever the signing key approves.
   `systemd-hibernate-resume.service`, on Debian
   `scripts/local-top/tpm2-kira-close` (`--resume`: a failure clears `resume=`).
 
-`tpm2-kira reveal` in the running system reports "Closed until the next
+`slot info` and `status` in the running system say "closed until the next
 boot". `slot approve` still works; the next boot opens the slots again.
 A slot sealed from the registers (post-separator values, the event log not
 usable) shows no code at boot: the close comes before the separator.

@@ -645,7 +645,7 @@ YubiKey, it is never on disk. §19 has what follows for root on the running syst
 6.  Show the key once, as base32 and QR code, for the authenticator
 ```
 
-### 5.2 Reveal / run (initrd)
+### 5.2 The code screen (`run`, initrd)
 
 ```
 1.  Read the record from its EFI variable, deserialise (not verified: no key
@@ -1171,8 +1171,8 @@ What this means in practice:
    verifies the signature before acting on any field, with a key it does
    not take from the record (§5.5); `slot info` verifies it too, and shows
    an unverified record as untrusted without opening the paths it names;
-   the phone's gate verifies it with the key the image carries. `reveal`
-   does not verify it, since the signing key is not available in the
+   the phone's gate verifies it with the key the image carries. The code
+   screen does not verify it, since the signing key is not available in the
    initrd. A planted record can carry the user's key objects only with an
    approval signed by the user's key for the current generation; otherwise
    it can only carry objects the attacker created, whose codes do not match
