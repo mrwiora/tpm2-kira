@@ -23,6 +23,9 @@ var lastSecureBoot string
 // lastInitrd is the need_anchor_key event drive saw last.
 var lastInitrd map[string]any
 
+// lastLayout is the keyboard_layout event drive saw last.
+var lastLayout map[string]any
+
 func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.PrivateKey, decision int) (record string, state string) {
 	s.SetMaxFragment(182)
 	queue := []*kiracore.Step{s.Start()}
@@ -80,6 +83,8 @@ func drive(t *testing.T, d *DemoMachine, s *kiracore.Session, key **ecdsa.Privat
 						dec = kiracore.DecisionContinue
 					}
 					queue = append(queue, s.Decide(dec, "Thinkpad-X1"))
+				case "keyboard_layout":
+					lastLayout = e
 				case "error":
 					t.Fatalf("error event: %s", st.Event(i))
 				}
@@ -204,5 +209,53 @@ func TestDemoMachineInitrdStates(t *testing.T) {
 		if (c.want == "not_established") != (lastInitrd["initrd_detail"] != nil) {
 			t.Errorf("%s: the reason: %v", c.boot, lastInitrd)
 		}
+	}
+}
+
+// A phone salt with a keyboard: handed over in one attestation, no layout there; at every boot
+// after it the phone shows the layout the machine's TPM opened, another each time.
+func TestDemoMachineKeyboard(t *testing.T) {
+	d, err := NewDemoMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key *ecdsa.PrivateKey
+	d.StartEnrolment(185)
+	s, _ := kiracore.NewEnrolSession(`{}`)
+	record, _ := drive(t, d, s, &key, 0)
+	if r := d.Outcome(5000); r != "enrolled" {
+		t.Fatalf("enrolment: %s", r)
+	}
+	if err := d.EnableKeyboard(); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	for boot := 0; boot < 3; boot++ {
+		d.NextBoot()
+		lastLayout = nil
+		d.StartAttestation(185)
+		s, err := kiracore.NewAttestSession(`{}`, record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec, _ := drive(t, d, s, &key, 0); rec != "" {
+			record = rec
+		}
+		if r := d.Outcome(5000); !strings.Contains(r, "verdict=ok") {
+			t.Fatalf("boot %d: %s", boot, r)
+		}
+		if boot == 0 {
+			if lastLayout != nil || d.KeyboardLayout() != "" {
+				t.Fatalf("a layout in the hand-over: %v", lastLayout)
+			}
+			continue
+		}
+		if lastLayout == nil || lastLayout["layout"] != d.KeyboardLayout() || d.KeyboardLayout() == "" || lastLayout["keyboard_keys"] != "abcdefghijklmnopqrstuvwxyz0123456789" {
+			t.Fatalf("boot %d: shown %v, the machine's %q", boot, lastLayout, d.KeyboardLayout())
+		}
+		seen = append(seen, d.KeyboardLayout())
+	}
+	if seen[0] == seen[1] {
+		t.Fatal("the same layout twice")
 	}
 }

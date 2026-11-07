@@ -23,7 +23,7 @@ func (b *factorBackend) TakeRelease(r *Release) (uint8, string) {
 	return b.status, "kept for the disk"
 }
 
-func attestWithFactor(t *testing.T, m *attesttest.Machine, p *attesttest.Phone, rec *MachineRecord, be *factorBackend) (*AttestResult, []Event) {
+func attestWithFactor(t *testing.T, m *attesttest.Machine, p *attesttest.Phone, rec *MachineRecord, be AttesterBackend) (*AttestResult, []Event) {
 	t.Helper()
 	a, b := attesttest.NewPipe()
 	type r struct {

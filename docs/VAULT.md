@@ -40,7 +40,7 @@ Contents: [1 The idea](#1-the-idea) ·
 [7 The machine's side](#7-the-machines-side) ·
 [8 The protocol](#8-the-protocol) · [9 Threats](#9-threats) ·
 [10 The code](#10-the-code) · [11 Tests](#11-tests) ·
-[12 Operator approval and the pepper](#12-operator-approval-and-the-pepper) · [13 Known limits](#13-known-limits)
+[12 Operator approval and the pepper](#12-operator-approval-and-the-pepper) · [12a The one-time keyboard](#12a-the-one-time-keyboard) · [13 Known limits](#13-known-limits)
 
 ## 1. The idea
 
@@ -613,6 +613,19 @@ with `--pepper` is released only on an approval that carries the pepper,
 and its key cannot be made without it - not by the machine, not by
 whoever holds the vault. What the machine and the vault do with it is in
 §5 and §6.1.
+
+## 12a The one-time keyboard
+
+A device enrolled with `--keyboard-pepper` (recipe `0x1402`; [DISK-KEY.md](DISK-KEY.md#a-pepper-typed-through-a-one-time-keyboard-0x1302-0x1402))
+is enrolled as any other, R and all, with `keyboard` in its enrolment. Every release of R then
+carries `keyboard` beside it: a seed drawn for this boot, `TPM2_MakeCredential` for the EK and the
+slot's release key, so it opens where R opens. The layout it stands for, which the person types a
+pepper of their own through at the machine, is in `tpm2-kira-vault requests` (drawn on a US keyboard:
+each key above the character it types) and in `keyboard_keys` and `layout` of `GET /v1/requests`, as
+a request in state `released`, for 15 minutes (`LayoutTTL`). It is kept in memory alone, never in the
+audit, which says only "with a one-time keyboard". The pepper never reaches the vault, and the vault
+cannot tell a right one from a wrong one. Approve mode works as for any device; an operator's pepper
+(`--pepper`) is not taken together with it.
 
 ## 13. Known limits
 

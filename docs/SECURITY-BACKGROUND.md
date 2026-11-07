@@ -1605,6 +1605,25 @@ the machine's prompt comes when the vault refuses, as for any other refusal.
 **What it rests on, in the vault's case too:** the firmware's measurement. On the VMs a real
 `on` has now gone through it, keys in the firmware (§17.2).
 
+### 13.5b The one-time keyboard: what it adds and what it does not
+
+A pepper typed through a one-time keyboard ([DISK-KEY.md](DISK-KEY.md)) is a secret no device keeps,
+in the key beside the 256-bit salt of the phone or the vault, which neither can read. It answers a
+recording of the keyboard, which a password or a salt typed in the clear (`0x1100`) does not: the
+keys are the pepper through a permutation of the 36 keys drawn for this boot, from a seed wrapped for
+the TPM and the slot's release key on top of the channel. Keys alone, or layout alone, give nothing
+of the pepper; the next boot's layout is another.
+
+**What it shows:** one layout for the boot, so a recording has the pepper's length and its pattern of
+repeats. Of 36 characters, a pepper of 8 is about 41 bits, and that pattern takes some from it: the
+pepper is an addition to the salt and the password, not the key's strength. **The phone or the vault
+sees the layout**, and a party that has both the layout (the phone's screen, the vault's memory or its
+operators' view for 15 minutes) and a recording of the keys has the pepper. **The password is still
+typed in the clear.** **A machine compromised while attested** sees keys and layout together. Tests:
+`TestKeyboardLayoutFromTheSeed`, `TestPhoneKeyboard`, `TestPhoneKeyboardRefusesAnotherKey`,
+`TestPhoneKeyboardOnATPM`, `TestVaultKeyboardOnATPM`, the vault's `TestKeyboard*`,
+`TestDemoMachineKeyboard`, Marify's `keyboardLayoutIsTheMachines`.
+
 ### 13.5a Whether the quote covers the initrd
 
 The bind screen says whether the checked PCRs measure the initrd, the place a passphrase

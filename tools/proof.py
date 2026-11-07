@@ -4,7 +4,7 @@
     tools/proof.py                            # the proof, from the snapshot fresh
     tools/proof.py --since '2026-11-03 09:00' # and, after it, what AGENTS.md's table asks for the batch
     tools/proof.py --with marify,safearch-vm  # and, after it, these
-    tools/proof.py --all                      # before a release: every scenario and every part
+    tools/proof.py --all                      # before a release: every scenario and every part, phone-vm too
     tools/proof.py --only test-all            # these parts alone: NO FINAL PROOF
 
 The proof is DEFAULT: the two machines in parallel, each through the scenarios that have a budget
@@ -90,6 +90,9 @@ def parts_table(run_dir, everything=False):
         Part("tpm2-verifier", go_test, project("tpm2-verifier"), check=no_cached, memory=1000),
         Part("safearch-vm", ["tests/vm.sh"], project("safearch"), memory=3500),
         Part("marify", ["android/scripts/test-emulator.sh"], project("marify"), memory=6600),
+        # Marify on an emulator against the local VMs, one simulated Bluetooth: never beside marify
+        # (one netsimd per user), so more than the budget leaves beside it.
+        Part("phone-vm", [tool("phone-vm-test.py"), "--target", "both", "--run-dir", os.path.join(run_dir, "phone-vm")], REPO, machines=True, memory=9000),
     ]
     return {p.name: p for p in table}
 

@@ -63,6 +63,9 @@ type MachineRecord struct {
 	// kept since the person accepted a verdict whose evidence carried it,
 	// and returned after every trusted receipt. The phone cannot open it.
 	Factor *FactorRecord `json:"factor,omitempty"`
+	// Keyboard, beside the factor, says its keyslot takes a pepper typed through the phone's
+	// one-time keyboard (keyboard.go): every release of the factor carries this boot's seed.
+	Keyboard *KeyboardRecord `json:"keyboard,omitempty"`
 }
 
 // FactorRecord is a kept FactorBlob with when it was kept.
@@ -132,7 +135,10 @@ type Event struct {
 	Code          uint16         `json:"code,omitempty"`
 	Result        uint8          `json:"result,omitempty"`
 	Message       string         `json:"message,omitempty"`
-	Warnings      []string       `json:"warnings,omitempty"`
+	// EvKeyboardLayout: on the key KeyboardKeys[i] the character Layout[i], for this boot alone.
+	KeyboardKeys string   `json:"keyboard_keys,omitempty"`
+	Layout       string   `json:"layout,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
 
 	// need_anchor_key: what the phone learnt about the machine before the
 	// user binds it.
@@ -155,18 +161,19 @@ type Event struct {
 
 // Event types.
 const (
-	EvSAS           = "sas"             // show SAS; call ConfirmSAS
-	EvNeedAnchorKey = "need_anchor_key" // create the keystore key; call ProvideAnchorKey
-	EvNeedSignature = "need_signature"  // sign TBS with the anchor key; call ProvideSignature
-	EvEnrolled      = "enrolled"        // persist Record
-	EvHello         = "hello"           // the machine identified itself
-	EvVerdict       = "verdict"         // show Verdict; if NeedsDecision call Decide
-	EvEventlog      = "eventlog"        // event log transfer progress
-	EvReceiptAck    = "receipt_ack"     // what the machine made of the receipt
-	EvRecordUpdated = "record_updated"  // persist Record (replaces the stored one)
-	EvReleaseAck    = "release_ack"     // what the machine made of the released factor
-	EvDone          = "done"            // session finished normally; disconnect
-	EvError         = "error"           // session failed; disconnect
+	EvSAS            = "sas"             // show SAS; call ConfirmSAS
+	EvNeedAnchorKey  = "need_anchor_key" // create the keystore key; call ProvideAnchorKey
+	EvNeedSignature  = "need_signature"  // sign TBS with the anchor key; call ProvideSignature
+	EvEnrolled       = "enrolled"        // persist Record
+	EvHello          = "hello"           // the machine identified itself
+	EvVerdict        = "verdict"         // show Verdict; if NeedsDecision call Decide
+	EvEventlog       = "eventlog"        // event log transfer progress
+	EvReceiptAck     = "receipt_ack"     // what the machine made of the receipt
+	EvRecordUpdated  = "record_updated"  // persist Record (replaces the stored one)
+	EvReleaseAck     = "release_ack"     // what the machine made of the released factor
+	EvKeyboardLayout = "keyboard_layout" // the layout to type the pepper through, for this boot alone
+	EvDone           = "done"            // session finished normally; disconnect
+	EvError          = "error"           // session failed; disconnect
 )
 
 // Signing purposes in need_signature events.
@@ -263,15 +270,18 @@ type Verifier struct {
 	verdict  *Verdict
 	qd       []byte
 
-	bootPoint   []byte      // enrolment: the checked boot key, to be pinned
-	signingName []byte      // enrolment: the signing key behind its policy
-	bootSecret  *BootSecret // attestation: this session's code and proof key
-	receipt     *Receipt
-	remember    bool
-	factorKeep  *FactorBlob // attestation: the factor the evidence asked to keep
-	evlog       []byte
-	evlogSum    []byte
-	evlogTot    uint32
+	bootPoint    []byte      // enrolment: the checked boot key, to be pinned
+	signingName  []byte      // enrolment: the signing key behind its policy
+	bootSecret   *BootSecret // attestation: this session's code and proof key
+	receipt      *Receipt
+	remember     bool
+	factorKeep   *FactorBlob     // attestation: the factor the evidence asked to keep
+	keyboardKeep *KeyboardKeep   // attestation: the keyboard the evidence asked to keep
+	keyboardName []byte          // and its release key's Name, checked
+	layout       *KeyboardLayout // this session's layout, shown once the machine took the seed
+	evlog        []byte
+	evlogSum     []byte
+	evlogTot     uint32
 }
 
 func (c *VerifierConfig) now() time.Time {
@@ -821,6 +831,15 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 		// matching boot waits for their go-ahead, after they compared the
 		// code with the machine's screen.
 		v.factorKeep = ev.FactorKeep
+		v.keyboardKeep = ev.KeyboardKeep
+		if k := ev.KeyboardKeep; k != nil {
+			if ev.FactorKeep == nil {
+				return v.fail(out, ErrCodeProtocol, "a keyboard to keep without a phone salt")
+			}
+			if v.keyboardName, err = checkKeyboardKeep(k, v.record.SigningKeyName); err != nil {
+				return v.fail(out, ErrCodeProtocol, "the keyboard to keep: "+err.Error())
+			}
+		}
 		v.state = vsWaitDecision
 		out.Events = append(out.Events, Event{Type: EvVerdict, Verdict: v.verdict, EventlogAvail: v.evlogSum != nil, NeedsDecision: true, FactorOffered: ev.FactorKeep != nil})
 		return out, nil
@@ -852,19 +871,41 @@ func (v *Verifier) handleAttest(out *Output, d *Decoder) (*Output, error) {
 				return v.fail(out, ErrCodeProtocol, err.Error())
 			}
 			out.Events = append(out.Events, Event{Type: EvReleaseAck, Result: ack.Status, Message: ack.Message})
+			// The layout only once the TPM opened the seed, and not in the session that handed the
+			// salt over: nothing is typed there.
+			if ack.Status == ReleaseOK && v.layout != nil && v.factorKeep == nil {
+				out.Events = append(out.Events, Event{Type: EvKeyboardLayout, KeyboardKeys: KeyboardKeys, Layout: v.layout.String()})
+			}
+			v.layout.Wipe()
+			v.layout = nil
 			return v.bye(out)
 		}
 	}
 	return v.fail(out, ErrCodeProtocol, "unexpected "+d.Type.String())
 }
 
-// sendRelease hands the machine its kept factor.
+// sendRelease hands the machine its kept factor and, with a keyboard, this boot's seed, wrapped for
+// its TPM and the slot's release key; the layout is kept to show.
 func (v *Verifier) sendRelease(out *Output) (*Output, error) {
 	f := v.record.Factor
-	b, err := (&Release{
+	r := &Release{
 		Kind: ReleaseKindFactor, Slot: v.record.Slot,
 		CredentialBlob: f.CredentialBlob, EncryptedSecret: f.EncryptedSecret, Label: f.Label,
-	}).Encode()
+	}
+	if v.record.HasKeyboard() {
+		seed, err := NewKeyboardSeed(v.cfg.rng())
+		if err != nil {
+			return v.fail(out, ErrCodeProtocol, err.Error())
+		}
+		defer clear(seed)
+		if v.layout, err = KeyboardLayoutOf(seed); err != nil {
+			return v.fail(out, ErrCodeProtocol, err.Error())
+		}
+		if r.KeyboardCredential, r.KeyboardSecret, err = MakeCredential(v.cfg.rng(), v.record.EKPub, v.record.Keyboard.ReleaseKeyName, seed); err != nil {
+			return v.fail(out, ErrCodeProtocol, "wrapping the keyboard for the TPM: "+err.Error())
+		}
+	}
+	b, err := r.Encode()
 	if err := v.send(out, b, err); err != nil {
 		return v.fail(out, ErrCodeProtocol, err.Error())
 	}
@@ -1049,6 +1090,11 @@ func (v *Verifier) updateRecord() {
 	r.FirmwareVersion = v.verdict.FirmwareVersion
 	r.LastAttested = &now
 	if f := v.factorKeep; f != nil {
+		// A new phone salt replaces the keyboard too: with it, or without one.
+		r.Keyboard = nil
+		if v.keyboardKeep != nil {
+			r.Keyboard = &KeyboardRecord{ReleaseKeyName: v.keyboardName, KeptAt: now}
+		}
 		r.Factor = &FactorRecord{CredentialBlob: f.CredentialBlob, EncryptedSecret: f.EncryptedSecret, Label: f.Label, KeptAt: now}
 	}
 	if v.verdict.Profile != "" {

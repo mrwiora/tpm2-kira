@@ -101,10 +101,12 @@ class Scenario:
     """A part of a run. budget: seconds per distribution, measured, when it is in the proof; None
     runs it under --all, or when named. distro: on that one alone. needs: what has to have run on
     the machine before it; hib: on the machines of tools/localvm.py alone; vault: with the run's vault;
-    secure: on the machine with Secure Boot really on, from the scenario secure-boot."""
+    secure: on the machine with Secure Boot really on, from the scenario secure-boot; phone: with the
+    emulator's Marify on the simulated Bluetooth (--phone, tools/phone-vm-test.py)."""
 
-    def __init__(self, name, budget=None, distro=None, needs=(), hib=False, vault=False, secure=False):
+    def __init__(self, name, budget=None, distro=None, needs=(), hib=False, vault=False, secure=False, phone=False):
         self.name, self.budget, self.distro, self.needs, self.hib, self.vault, self.secure = name, budget, distro, needs, hib, vault, secure
+        self.phone = phone
 
 
 def budget(arch, debian):
@@ -133,12 +135,14 @@ SCENARIOS = (
     Scenario("silent-tpm", budget(124, 124), hib=True),
     Scenario("V9-long", distro="debian", needs=("silent-tpm",), hib=True),
     Scenario("V8", hib=True),
+    Scenario("phone", needs=("typed-boot",), phone=True),
     Scenario(SECURE_BOOT, budget(218, 258), secure=True),
     Scenario("tpm-salt", budget(32, 30), needs=(SECURE_BOOT,), secure=True),
     Scenario("vault-pepper", budget(133, 158), needs=(SECURE_BOOT,), vault=True, secure=True),
     Scenario("revoked", budget(60, 66), needs=("tpm-salt", "vault-pepper"), vault=True, secure=True),
     Scenario("vault-alone", needs=("vault-pepper",), vault=True, secure=True),
     Scenario("typed-vault", needs=("vault-pepper",), vault=True, secure=True),
+    Scenario("keyboard-vault", needs=("vault-pepper",), vault=True, secure=True),
     Scenario("firmware-refuses", budget(12, 10), needs=(SECURE_BOOT,), secure=True),
 )
 ALWAYS = "typed-boot"  # what every scenario of the setup in Setup Mode starts from
@@ -576,6 +580,72 @@ class Vault:
         self._sh(["docker", "rm", "-f", self.NAME], check=False)
 
 
+class PhoneStage:
+    """One stage of Marify's RealMachineTest (app.marify.vm), running: its process, and what it
+    logged under the tag KiraVm (key=value lines)."""
+
+    def __init__(self, phone, name, proc, out_path):
+        self.phone, self.name, self.proc, self.out_path = phone, name, proc, out_path
+
+    def values(self):
+        out = self.phone.adb("logcat", "-d", "-s", "KiraVm:I").stdout
+        vals = {}
+        for line in out.splitlines():
+            m = re.search(r"KiraVm\s*:\s*(\w+)=(.*)$", line)
+            if m:
+                vals.setdefault(m.group(1), m.group(2).strip())
+        return vals
+
+    def value(self, key, timeout=120):
+        """What the stage logged for key, waited for while it runs; None once it ended without."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            v = self.values().get(key)
+            if v is not None:
+                return v
+            if self.proc.poll() is not None:
+                return self.values().get(key)
+            time.sleep(1)
+        return None
+
+    def wait(self, timeout=360):
+        """The stage's end: (passed, its instrumentation output)."""
+        try:
+            self.proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+        with open(self.out_path) as f:
+            out = f.read()
+        return ("OK (1 test)" in out, out)
+
+
+class Phone:
+    """The emulator's Marify, driven stage by stage through its instrumented RealMachineTest; the
+    emulator, its simulated Bluetooth and the installed APKs are tools/phone-vm-test.py's."""
+
+    RUNNER = "io.wiora.marify.debug.test/androidx.test.runner.AndroidJUnitRunner"
+
+    def __init__(self, serial, log_dir):
+        self.serial, self.log_dir, self.n = serial, log_dir, 0
+        self.adb_path = os.path.join(os.environ.get("ANDROID_HOME", os.path.expanduser("~/Android/Sdk")), "platform-tools", "adb")
+
+    def adb(self, *args, timeout=60):
+        return subprocess.run([self.adb_path, "-s", self.serial, *args], capture_output=True, text=True, timeout=timeout)
+
+    def start(self, stage, timeout=300, approve=None):
+        """Starts a stage; its log is cleared first, so what it says is its own."""
+        self.n += 1
+        self.adb("logcat", "-c")
+        cmd = ["shell", "am", "instrument", "-w", "-r", "-e", "class", "app.marify.vm.RealMachineTest", "-e", "vm", stage, "-e", "timeout", str(timeout)]
+        if approve:
+            cmd += ["-e", "approve", approve]
+        out_path = os.path.join(self.log_dir, f"phone-{self.n:02d}-{stage}.log")
+        f = open(out_path, "w")
+        proc = subprocess.Popen([self.adb_path, "-s", self.serial, *cmd, self.RUNNER], stdout=f, stderr=subprocess.STDOUT)
+        return PhoneStage(self, stage, proc, out_path)
+
+
 class Machine:
     def __init__(self, name, distro, host, user, password, luks_pass, run_dir, ssh_port=22, boot_port=SSH_PORT):
         self.name, self.distro, self.host, self.user = name, distro, host, user
@@ -600,6 +670,7 @@ class Machine:
         self.tpm_salt_keyslot = None  # the salt in this TPM's keyslot, while enrolled
         self.vault_keyslot = None  # the vault's keyslot now
         self.vault_device = None  # the name the vault knows this machine's device by now
+        self.phone = None  # the emulator's Marify (Phone), in a run with --phone
 
     # -- helpers ------------------------------------------------------------
 
@@ -1704,6 +1775,243 @@ class Machine:
         out = vault.admin("audit")
         self.check("the vault's audit holds no pepper", self.PEPPER not in out, out[-300:])
 
+    KB_PEPPER = "vmtest9pepper"
+
+    def vault_layout(self, vault, name, seen=(), timeout=120):
+        """The one-time layout the vault's CLI shows for the latest release of name, none of seen: key
+        -> what it types."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            out = vault.admin("requests")
+            at = out.rfind("of " + name + ": type the pepper through this layout")
+            if at >= 0:
+                layout = {}
+                lines = out[at:].splitlines()[1:9]
+                for keys, types in zip(lines[0::2], lines[1::2]):
+                    k, t = keys.split()[1:], types.split()[1:]
+                    if len(k) != len(t) or keys.split()[0] != "key" or types.split()[0] != "types":
+                        return None
+                    layout.update(zip(k, t))
+                if len(layout) != 36:
+                    return None
+                if layout not in seen:
+                    return layout
+            time.sleep(1)
+        return None
+
+    def vault_keyboard(self):
+        """A pepper typed through the vault's one-time keyboard (0x1402): the layout the vault's CLI
+        shows, the pepper typed through it at the prompt over SSH; one not of the layout's form is
+        asked for again. A second boot's layout is another, and neither layout nor pepper is in the
+        audit."""
+        vault = self.vault_of_run
+        self.head("a pepper typed through the vault's one-time keyboard (0x1402)")
+        self.vault_leave(vault)
+        name = self.name + "-keyboard"
+        url, pin, token = self.vault_token(vault, name)
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --keyboard-pepper --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {name}", "luks-enrol-vault-keyboard")
+        try:
+            s.expect(r"Password \(typed at the machine at every boot\): ?$", 300); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"The same password again: ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"Pepper: ?$", 60); s.send(self.KB_PEPPER + "\n")
+            s.expect(r"The same pepper again: ?$", 60); s.send(self.KB_PEPPER + "\n")
+            s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1402 ", 300)
+            self.vault_keyslot, self.vault_device = m.group(1), name
+            s.wait_end(120)
+            self.check("luks enrol --salt vault --keyboard-pepper: a keyslot of recipe 0x1402", True)
+        except Fail as e:
+            self.check("luks enrol --keyboard-pepper", False, str(e))
+            raise
+        finally:
+            s.close()
+        rc, out = self.run("tpm2-kira status 2>&1", save="status-vault-keyboard.log")
+        self.check("status: the keyboard's recipe", "pepper typed through a one-time keyboard" in out, out[-500:])
+
+        layouts = []
+        for boot in (1, 2):
+            self.head(f"boot {boot} through the vault's keyboard")
+            self.run("systemctl reboot")
+            self.wait_port(22, False, 120)
+            if not self.check(f"keyboard {boot}: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
+                raise Fail("no boot SSH server")
+            s = self.boot_session(f"keyboard-{boot}")
+            try:
+                text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
+                self.after_resume_boot(text)
+                layout = self.vault_layout(vault, name, layouts)
+                if not self.check(f"keyboard {boot}: the vault's CLI shows a layout of the 36 keys", layout is not None and sorted(layout.values()) == sorted(layout.keys())):
+                    raise Fail("no layout shown")
+                layouts.append(layout)
+                typed = "".join(next(k for k, t in layout.items() if t == c) for c in self.KB_PEPPER)
+                s.send("\r")
+                text, _ = s.expect(r"Password for disk \S+: ?$", 300)
+                self.check(f"keyboard {boot}: the prompt says to type the pepper through the vault's layout", "layout the vault shows" in text, text[-500:])
+                s.send(VAULT_PASSWORD + "\r")
+                s.expect(r"Pepper for disk \S+: ?$", 60)
+                s.send("ab-cd\r")
+                text, _ = s.expect(r"Pepper for disk \S+: ?$", 60)
+                self.check(f"keyboard {boot}: what is no pepper is asked for again", "not a pepper" in text, text[-400:])
+                s.send(typed + "\r")
+                s.wait_end(600)
+            finally:
+                s.close()
+            if not self.check(f"keyboard {boot}: the disk opens with password, salt and the pepper through the layout", self.wait_port(22, True, 300)):
+                raise Fail("the keyboard's boot did not come up")
+            self.booted(f"keyboard {boot}")
+        self.check("the second boot's layout is another", len(layouts) == 2 and layouts[0] != layouts[1], str(len(layouts)))
+        out = vault.admin("audit")
+        self.log.save("vault-audit-keyboard.log", out)
+        shown = ["".join(l[k] for k in "abcdefghijklmnopqrstuvwxyz0123456789") for l in layouts]
+        self.check("the vault's audit holds neither layout nor pepper", self.KB_PEPPER not in out and not any(x in out for x in shown), out[-300:])
+
+    PHONE_PASSWORD = "kira-vmtest-phone-pw"
+    PHONE_PEPPER = "vmtest7phone"
+
+    def phone_guest(self):
+        """The test's own Bluetooth on the machine, never a package's: ttyS2 is the emulator's
+        simulated Bluetooth (netsimd's HCI socket, tools/localvm.py --bt), made an adapter by btattach
+        in the running system and in the boot image; bluetoothd masked, as the gate takes the adapter
+        whole."""
+        unit = """[Unit]
+Description=vmtest: the emulator's simulated Bluetooth on ttyS2 (tools/phone-vm-test.py)
+DefaultDependencies=no
+Requires=dev-ttyS2.device
+After=dev-ttyS2.device
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+
+[Service]
+ExecStartPre=-/usr/bin/modprobe hci_uart
+ExecStart=/usr/bin/btattach -B /dev/ttyS2 -P h4
+
+[Install]
+WantedBy=sysinit.target
+"""
+        if self.distro == "arch":
+            pkg = "pacman -S --noconfirm --needed bluez-utils"
+            image = """build() {
+    add_module hci_uart
+    add_binary /usr/bin/btattach
+    add_file /usr/lib/systemd/system/kira-test-btattach.service
+    add_symlink /usr/lib/systemd/system/sysinit.target.wants/kira-test-btattach.service /usr/lib/systemd/system/kira-test-btattach.service
+}
+"""
+            files = {"/usr/lib/systemd/system/kira-test-btattach.service": unit, "/etc/initcpio/install/kira-test-btattach": image}
+            hook = "grep -q kira-test-btattach /etc/mkinitcpio.conf || sed -i 's/^HOOKS=(\\(.*\\))/HOOKS=(\\1 kira-test-btattach)/' /etc/mkinitcpio.conf"
+        else:
+            pkg = "DEBIAN_FRONTEND=noninteractive apt-get install -y bluez"
+            head = 'PREREQ=""\nprereqs() { echo "$PREREQ"; }\ncase "$1" in prereqs) prereqs; exit 0;; esac\n'
+            files = {"/usr/lib/systemd/system/kira-test-btattach.service": unit,
+                     "/etc/initramfs-tools/hooks/kira-test-btattach": "#!/bin/sh\n" + head + ". /usr/share/initramfs-tools/hook-functions\ncopy_exec /usr/bin/btattach /usr/bin\nmanual_add_modules hci_uart\n",
+                     "/etc/initramfs-tools/scripts/init-premount/kira-test-btattach": "#!/bin/sh\n" + head + "modprobe hci_uart\n/usr/bin/btattach -B /dev/ttyS2 -P h4 >/dev/null 2>&1 &\n",
+                     "/etc/initramfs-tools/scripts/init-bottom/kira-test-btattach": "#!/bin/sh\n" + head + "kill $(pidof btattach) 2>/dev/null || true\n"}
+            hook = "true"
+        script = "set -e; " + pkg + " >/tmp/kira-test-bt.log 2>&1; "
+        for path, text in files.items():
+            b64 = base64.b64encode(text.encode()).decode()
+            script += f"mkdir -p {os.path.dirname(path)}; echo {b64} | base64 -d > {path}; "
+            if "/hooks/" in path or "/scripts/" in path:
+                script += f"chmod 755 {path}; "
+        script += f"{hook}; systemctl disable --now bluetooth.service 2>/dev/null || true; systemctl mask bluetooth.service; "
+        script += "systemctl enable --now kira-test-btattach.service; sleep 3; ls /sys/class/bluetooth"
+        rc, out = self.run(script + " 2>&1", save="phone-guest.log")
+        self.check("phone: the simulated Bluetooth is an adapter (btattach on ttyS2)", rc == 0 and "hci" in out, out[-500:])
+
+    def phone_keyboard(self):
+        """Marify on the emulator over the simulated Bluetooth, its real BLE code against the real
+        gate: the enrolment, the SAS compared on both sides; the hand-over of a phone salt with a
+        keyboard (0x1302); two boots the phone attests in the initrd, the code on the boot's screen
+        the phone's, its layout typed through at the boot SSH server, another layout each boot."""
+        ph = self.phone
+        self.head("the phone: Marify on the emulator, over the simulated Bluetooth")
+        self.phone_guest()
+        ok, out = ph.start("reset", 60).wait(120)
+        self.check("phone: the test's record is reset", ok, out[-300:])
+
+        st = ph.start("enrol", 300)
+        s = self.session("sudo tpm2-kira phone enrol --verify-tpm off --verify-phone off --adapter-wait 60s", "phone-enrol")
+        try:
+            while True:
+                text, m = s.expect(r"(\[y\] yes, I verified this boot.*: ?$|Enrol anyway\? \[y/N\]: ?$|\[y\] it matches.*: ?$|Enrolled: +phone)", 400)
+                if "verified this boot" in m.group(1) or "Enrol anyway" in m.group(1):
+                    s.send("y\n")
+                elif "it matches" in m.group(1):
+                    shown = re.findall(r"Confirm this number matches the one shown in the app:\s+([0-9 ]+?)\s*$", text, re.M)
+                    machine_sas = re.sub(r"\D", "", shown[-1]) if shown else ""
+                    phone_sas = re.sub(r"\D", "", st.value("sas", 60) or "")
+                    same = machine_sas != "" and machine_sas == phone_sas
+                    self.check("phone enrol: the SAS on the machine is the phone's", same, f"machine {machine_sas!r}, phone {phone_sas!r}")
+                    s.send("y\n" if same else "n\n")
+                else:
+                    break
+            s.wait_end(120)
+        finally:
+            s.close()
+        ok, out = st.wait(300)
+        self.check("phone enrol: the phone enrolled the machine over BLE", ok and st.values().get("outcome") == "Succeeded", out[-400:])
+        out = self.rebuild()
+        self.check("the image is rebuilt with the phone's Bluetooth in it", "Bluetooth" in out, out[-600:])
+
+        st = ph.start("attest", 300)
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt phone --keyboard-pepper", "luks-enrol-phone-keyboard")
+        try:
+            s.expect(r"Password for the disk \(the factor's other half\): ?$", 420); s.send(self.PHONE_PASSWORD + "\n")
+            s.expect(r"The same password again: ?$", 60); s.send(self.PHONE_PASSWORD + "\n")
+            s.expect(r"Pepper: ?$", 60); s.send(self.PHONE_PEPPER + "\n")
+            s.expect(r"The same pepper again: ?$", 60); s.send(self.PHONE_PEPPER + "\n")
+            s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
+            s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1302 ", 300)
+            s.wait_end(120)
+            self.check("luks enrol --salt phone --keyboard-pepper: the phone kept the salt, a keyslot of recipe 0x1302", True)
+        except Fail as e:
+            self.check("luks enrol --salt phone --keyboard-pepper", False, str(e))
+            raise
+        finally:
+            s.close()
+        ok, out = st.wait(120)
+        vals = st.values()
+        self.check("the hand-over: the phone's session passed and showed no layout", ok and "layout" not in vals, f"{vals} {out[-300:]}")
+
+        layouts = []
+        for boot in (1, 2):
+            self.head(f"boot {boot}: the phone attests the initrd")
+            self.run("systemctl reboot")
+            self.wait_port(22, False, 120)
+            if not self.check(f"phone boot {boot}: the boot SSH server answers", self.wait_port(SSH_PORT, True, 300)):
+                raise Fail("no boot SSH server")
+            # The first boot of the image the phone's enrolment rebuilt is a changed one: approved and remembered.
+            st = ph.start("attest", 300, approve="changed" if boot == 1 else None)
+            s = self.boot_session(f"phone-{boot}")
+            try:
+                ok, out = st.wait(300)
+                vals = st.values()
+                self.log.save(f"phone-boot-{boot}-values.txt", "\n".join(f"{k}={v}" for k, v in vals.items() if k != "layout"))
+                # The first boot of the image the enrolment rebuilt may be changed (approved and
+                # remembered); the second matches.
+                want = ("changed", "match") if boot == 1 else ("match",)
+                self.check(f"phone boot {boot}: the phone attested the initrd ({vals.get('state')}, its boot key proved: a code of {len(vals.get('code', ''))} digits)",
+                           ok and vals.get("state", "").lower() in want and len(vals.get("code", "")) == 9, f"{ {k: v for k, v in vals.items() if k != 'layout'} } {out[-300:]}")
+                if not self.check(f"phone boot {boot}: the phone shows a layout of the 36 keys", len(vals.get("layout", "")) == 36 and vals.get("layout_keys") == "abcdefghijklmnopqrstuvwxyz0123456789", str({k: v for k, v in vals.items() if k != "layout"})):
+                    raise Fail("no layout from the phone")
+                layout = dict(zip(vals["layout_keys"], vals["layout"]))
+                layouts.append(vals["layout"])
+                # The phone's verdict ends the code screen: nothing is pressed here.
+                text, _ = s.expect(r"Password for disk \S+: ?$", 300)
+                self.check(f"phone boot {boot}: the code screen ends on the phone's verdict, with no key pressed", "Confirmed." in text, text[-600:])
+                self.check(f"phone boot {boot}: the prompt says to type the pepper through the phone's layout", "layout your phone shows" in text, text[-500:])
+                s.send(self.PHONE_PASSWORD + "\r")
+                s.expect(r"Pepper for disk \S+: ?$", 60)
+                typed = "".join(next(k for k, t in layout.items() if t == c) for c in self.PHONE_PEPPER)
+                s.send(typed + "\r")
+                s.wait_end(600)
+            finally:
+                s.close()
+            if not self.check(f"phone boot {boot}: the disk opens with password, phone salt and the pepper through the layout", self.wait_port(22, True, 300)):
+                raise Fail("the phone's boot did not come up")
+            self.booted(f"phone boot {boot}")
+        self.check("the second boot's layout is another", len(layouts) == 2 and layouts[0] != layouts[1])
+
     def slot_life(self):
         self.head("a slot's life")
         rc, out = self.run(f"tpm2-kira slot approve --nvram {self.slots[-1]} 2>&1", save="slot-approve.log")
@@ -1980,8 +2288,9 @@ class Machine:
         """What each scenario does here."""
         hib = self.hib
         out = {"typed-boot": self.first_boot, "second-typed-boot": lambda: self.cycle(3), "unapproved": self.unapproved_kernel, "tpm-salt": self.tpm_salt,
-               "vault-pepper": self.vault_pepper, "revoked": self.revoked, "vault-alone": self.vault_alone, "typed-vault": self.vault_typed,
-               "slot-life": self.slot_life, "removal": self.removal, SECURE_BOOT: self.secure_boot_setup, "firmware-refuses": self.firmware_refuses}
+               "vault-pepper": self.vault_pepper, "revoked": self.revoked, "vault-alone": self.vault_alone, "typed-vault": self.vault_typed, "keyboard-vault": self.vault_keyboard,
+               "slot-life": self.slot_life, "removal": self.removal, SECURE_BOOT: self.secure_boot_setup, "firmware-refuses": self.firmware_refuses,
+               "phone": self.phone_keyboard}
         if hib:
             out.update({"V6": hib.swap_risk, "hibernate": hib.scenario_hibernate, "debian-resume": hib.scenario_resume, "V3": hib.step_v3, "no-tpm": hib.step_no_tpm, "V4-reverted": hib.step_v4_reverted,
                         "silent-tpm": hib.silent_tpm, "V9-long": hib.silent_tpm_long, "V8": hib.way_out})
@@ -1992,7 +2301,7 @@ class Machine:
         steps = self.scenario_steps()
         wanted = [scenario(n) for n in names if n != SETUP]
         return [(s, steps[s.name]) for s in wanted if s.name in steps and s.distro in (None, self.distro) and (s.hib is False or self.hib) and (s.vault is False or self.vault_of_run)
-                and (not s.secure or getattr(self, "lv", None))]
+                and (not s.secure or getattr(self, "lv", None)) and (not s.phone or self.phone)]
 
     def recover(self):
         """Back to the saved setup, booted: a state no failed step left anything in. False
@@ -2153,14 +2462,18 @@ class Machine:
         return not failed, text
 
 
+SECUREBOOT_VM_LOCK = threading.Lock()
+
+
 def secureboot_vm():
-    """tools/secureboot-vm.py, one module per process."""
-    if "secureboot_vm" not in sys.modules:
-        spec = importlib.util.spec_from_file_location("secureboot_vm", os.path.join(REPO, "tools", "secureboot-vm.py"))
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["secureboot_vm"] = mod
-        spec.loader.exec_module(mod)
-    return sys.modules["secureboot_vm"]
+    """tools/secureboot-vm.py, one module per process; the machines' threads wait for it whole."""
+    with SECUREBOOT_VM_LOCK:
+        if "secureboot_vm" not in sys.modules:
+            spec = importlib.util.spec_from_file_location("secureboot_vm", os.path.join(REPO, "tools", "secureboot-vm.py"))
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["secureboot_vm"] = mod
+            spec.loader.exec_module(mod)
+        return sys.modules["secureboot_vm"]
 
 
 def build_channel_fixture(run_dir):
@@ -2229,6 +2542,7 @@ def main():
     p.add_argument("--localvm-config", help="the machines' config for the saved setup (default: tools/localvm.py's)")
     p.add_argument("--save-setup", action="store_true", help=f"the steps up to the first reboot, kept in the snapshot {SETUP_SNAPSHOT}; the run ends")
     p.add_argument("--from-setup", action="store_true", help=f"start from the snapshot {SETUP_SNAPSHOT}, without building: no final proof")
+    p.add_argument("--phone", metavar="SERIAL", help="the emulator (adb serial) whose Marify attests the machine over the simulated Bluetooth: the scenario phone; tools/phone-vm-test.py sets it up")
     p.add_argument("--drop-setup", action="store_true", help=f"remove the snapshots {SETUP_SNAPSHOT} and {SECURE_SETUP_SNAPSHOT} and end")
     args = p.parse_args()
     if sum((args.save_setup, args.from_setup, args.drop_setup)) > 1:
@@ -2281,6 +2595,8 @@ def main():
         if name in local:
             m.lv = local[name]
         m.fast_kdf = args.fast_kdf
+        if args.phone:
+            m.phone = Phone(args.phone, m.dir)
         if args.fast_kdf:
             m.notes.append(FAST_KDF_NOTE)
         if only:

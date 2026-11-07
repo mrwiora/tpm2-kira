@@ -39,6 +39,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 
 	"github.com/tpm2-trust/tpm2-kira/core/attest"
+	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
 	"github.com/tpm2-trust/tpm2-kira/internal/nvslot"
 	"github.com/tpm2-trust/tpm2-kira/internal/wipe"
 )
@@ -107,6 +108,10 @@ type GateService struct {
 	// the disk's key is asked for (and wiped with Close).
 	keep *attest.FactorBlob
 	salt []byte
+	// layout is this boot's one-time keyboard, its seed opened by the TPM with the salt;
+	// keepKeyboard what the phone is told beside keep, on the booted system.
+	layout       *attest.KeyboardLayout
+	keepKeyboard *attest.KeyboardKeep
 	// returned: at enrolment, the phone gave keep back unchanged.
 	returned bool
 	// expectRelease: the unlock mode needs the phone's phone salt, so a
@@ -328,6 +333,21 @@ func (s *GateService) Keep(f *attest.FactorBlob) {
 	s.keep = f
 }
 
+// KeepKeyboard sets the keyboard the phone is told of beside the factor (attest.KeyboardKeep), on
+// the booted system.
+func (s *GateService) KeepKeyboard(k *attest.KeyboardKeep) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keepKeyboard = k
+}
+
+// KeyboardToKeep implements attest.KeyboardBackend.
+func (s *GateService) KeyboardToKeep() *attest.KeyboardKeep {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keepKeyboard
+}
+
 // FactorToKeep implements attest.FactorBackend.
 func (s *GateService) FactorToKeep() *attest.FactorBlob {
 	s.mu.Lock()
@@ -380,12 +400,59 @@ func (s *GateService) TakeRelease(r *attest.Release) (uint8, string) {
 	}
 	salt := FactorSalt(f, r.Label)
 	wipe.Bytes(f)
+	var layout *attest.KeyboardLayout
+	if r.KeyboardCredential != nil {
+		s.TPMMu.Lock()
+		seed, err := UnwrapFactor(s.TPM, s.be.Sealed, s.be.SealIndex, s.Blob, &nvslot.WrappedFactor{Credential: r.KeyboardCredential, EncryptedSecret: r.KeyboardSecret})
+		s.TPMMu.Unlock()
+		if err != nil {
+			wipe.Bytes(salt)
+			return attest.ReleaseTPMRefused, "the TPM opened the salt, not the keyboard: " + err.Error()
+		}
+		layout, err = attest.KeyboardLayoutOf(seed)
+		wipe.Bytes(seed)
+		if err != nil {
+			wipe.Bytes(salt)
+			return attest.ReleaseTPMRefused, "the keyboard: " + err.Error()
+		}
+	}
 	s.mu.Lock()
 	wipe.Bytes(s.salt)
 	s.salt = salt
+	s.layout.Wipe()
+	s.layout = layout
 	s.Current.SaltTaken = true
 	s.mu.Unlock()
+	if layout != nil {
+		return attest.ReleaseOK, "the TPM opened the salt and the keyboard; the pepper is typed through the layout the phone shows"
+	}
 	return attest.ReleaseOK, "the TPM opened the salt; the disk's key is derived from it and the password typed at the machine"
+}
+
+// phoneKeyboard is the phone's one-time keyboard in this boot.
+type phoneKeyboard struct{ layout *attest.KeyboardLayout }
+
+func (k *phoneKeyboard) From() string { return "your phone" }
+
+// Pepper implements diskkey.KeyboardSession: the phone hears nothing back, so a wrong pepper of the
+// right form makes a key that opens nothing, as a mistyped password does.
+func (k *phoneKeyboard) Pepper(typed []byte) ([]byte, error) {
+	p, err := k.layout.Pepper(typed)
+	if errors.Is(err, attest.ErrKeyboardPepper) {
+		return nil, diskkey.ErrNotAPepper
+	}
+	return p, err
+}
+
+// KeyboardSession is the one-time keyboard the phone released in this boot, or nil.
+func (s *GateService) KeyboardSession() diskkey.KeyboardSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.layout == nil {
+		return nil
+	}
+	l := *s.layout
+	return &phoneKeyboard{layout: &l}
 }
 
 // Salt returns a copy of the combiner's salt from the released factor,
@@ -413,6 +480,9 @@ func (s *GateService) Forget() {
 	defer s.mu.Unlock()
 	wipe.Bytes(s.salt)
 	s.salt = nil
+	s.layout.Wipe()
+	s.layout = nil
+	s.keepKeyboard = nil
 	s.Channel.Wipe()
 }
 

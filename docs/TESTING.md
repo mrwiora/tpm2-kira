@@ -9,7 +9,7 @@ Four depths. Each says what it can show; only the third and the fourth end a bat
 | **Fast** | `make test-all`, a project's `go test ./...` | unit and integration tests against swtpm, no VM | `make test-all` 190 s, beside the VMs | no |
 | **A single scenario** | `tools/vmtest.py --only SCENARIO`, from the snapshot `setup` | that scenario and what it needs, on real VMs | 1-5 min: the table below, plus the typed boot it starts from | never; its report says so |
 | **The proof** | `tools/proof.py` | from `fresh`, both machines in parallel: `setup`, `typed-boot`, `hibernate`, `unapproved` (Arch), `silent-tpm`, and then, back at `fresh` with Secure Boot really on, `secure-boot`, `tpm-salt`, `vault-pepper`, `revoked`, `firmware-refuses`; beside them `make test-all`, aSSH's tests, the vault's, safearch's `tests/run.sh` | 15-20 min, an orientation; see below | yes, once per batch |
-| **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
+| **`--all`** | `tools/proof.py --all`, before a release, the owner's call | the proof's scenarios and `second-typed-boot`, `debian-resume`, `V6`, `V3`, `vault-alone`, `typed-vault`, `slot-life`, `removal`, `no-tpm`, `V4-reverted`, `V9-long`, `V8`; safearch's `tests/vm.sh`, Marify's emulator test, the phone against a VM (`tools/phone-vm-test.py`), go-uefi-slim's and tpm2-verifier's tests | about 26 min for the machines, summed from single runs: never run as one | yes, and more |
 
 Measured seconds, in the full run (`.local/runs/t/proof`, 935 s; `make test-all` 166 s and
 safearch's `tests/run.sh` 132 s started at 192 s, when the setups were done) and each scenario alone from
@@ -36,7 +36,7 @@ the unlock, the fast depth and the affected scenarios; a batch ends with the pro
 **What no depth covers:**
 
 - A real TPM, real firmware, a real phone or a real radio: the machines are qemu, OVMF and swtpm; the
-  phone is the emulator's, under `--all`.
+  phone is the emulator's and its radio netsim's, under `--all` (`tools/phone-vm-test.py`).
 - A real update of `db` or `dbx`.
 - Debian's normal resume (`debian-resume`, under `--all`) and Arch's V3, as things to rely on: the kernel
   refuses the hibernated image for its memory map, and that is "not tested", no failure. Debian's resume
@@ -58,6 +58,7 @@ Four levels, from seconds to a whole boot:
 | unit | Go | the logic: blobs, policies, recipes, the board, the parsers |
 | integration | Go, swtpm, socat | the binaries against a software TPM: sealing, codes, run, the unlock socket, SSH |
 | the VM test (`tools/vmtest.py`) | fresh, encrypted VMs; docker; the built packages | tpm2-kira's whole life on a real machine: install, `control`, reboots unlocked over SSH, the vault, hibernation |
+| the phone against a VM (`tools/phone-vm-test.py`) | the VMs, the Android SDK's emulator, KVM | Marify's real BLE code and session against the real gate: enrolment, a phone salt's hand-over, boots attested in the initrd, the pepper typed through the phone's layout |
 | the acceptance run (`tools/acceptance.py`) | a machine you watch | the same install checks, with you at the console for the reboot |
 
 ## Unit and integration tests
@@ -117,6 +118,7 @@ runs when named in `--only`:
 | `debian-resume` | Debian: the hibernation and the resume; its kernel refuses the image in most runs |
 | `vault-alone` | the unattended recipe, Secure Boot on: a boot nobody touches, the vault alone |
 | `typed-vault` | the operator-approved typed vault (0x1401), Secure Boot on |
+| `keyboard-vault` | a pepper typed through the vault's one-time keyboard (0x1402): two boots with other layouts, a pepper not of the layout's form asked again, a wrong pepper opening nothing, the right one the disk, Secure Boot on |
 | `V3` | Arch: the resume with tpm2-kira masked, the close alone |
 | `V6` | `control` on unencrypted swap |
 | `no-tpm` | V4 step 5: a boot with no TPM at all |
@@ -236,7 +238,7 @@ Each scenario starts with the typed boot, from the setup. `--only setup` runs th
 None of these is a final proof, and their reports' first lines say so.
 
 **With Secure Boot on** there is a setup of its own: the scenarios `tpm-salt`, `vault-pepper`, `revoked`,
-`vault-alone`, `typed-vault` and `firmware-refuses` start from the snapshot `setup-secure`.
+`vault-alone`, `typed-vault`, `keyboard-vault` and `firmware-refuses` start from the snapshot `setup-secure`.
 
 ```bash
 tools/secureboot-vm.py both       # only the snapshot secureboot: real keys in the firmware, no tpm2-kira
@@ -326,7 +328,7 @@ CA's slots (signed on Arch, 8 and 9 on Debian), and the boot's log has no error.
 a token, enrols with a pepper, rebuilds the image; a boot nobody touches waits for an operator, is
 approved first with a wrong pepper, then with the right one; what the vault shows of Secure Boot, from
 the quote. `revoked`: the screen and the prompt say the vault gave no key and the recovery recipe's
-keyslot is the fallback, typed over SSH; then unrevoked. Under `--all`, `vault-alone` and `typed-vault`.
+keyslot is the fallback, typed over SSH; then unrevoked. Under `--all`, `vault-alone`, `typed-vault` and `keyboard-vault`.
 
 **Hibernation** (`tools/hibernatetest.py`'s docstring has the steps): one hibernation of the typed boot,
 kept as a snapshot; the resume over SSH; suspend to RAM; the failure path from it.
@@ -369,6 +371,46 @@ The image is built with the host's network (`docker build --network
 host`): name resolution inside a build container depends on docker's
 firewall rules, which another program reloading the firewall (libvirt's,
 when its VMs restart) can take away.
+
+## The phone against a VM
+
+`tools/phone-vm-test.py --target arch|debian|both [--fast-kdf]` puts Marify on the Android emulator
+and a test VM on one simulated Bluetooth LE, with nobody at the keyboard:
+
+```mermaid
+flowchart LR
+  EMU["emulator: Marify,<br/>RealMachineTest"] <--> NS["netsimd<br/>--hci-port 7302"]
+  NS <-->|"TCP ↔ COM3 (ttyS2),<br/>btattach -P h4"| VM["VM: tpm2-kira's gate"]
+  DRV["phone-vm-test.py"] -->|"adb: am instrument"| EMU
+  DRV -->|"vmtest.py --only setup,phone"| VM
+```
+
+- **The radio:** the emulator's netsimd opens a raw HCI socket (`-netsim-args --hci-port`). qemu
+  connects the guest's COM3 to it (`tools/localvm.py --bt PORT`, or `LOCALVM_BT` for every start of
+  a run), and `btattach` makes it an adapter. Not COM2: the firmware prints its console to COM1 and
+  COM2, which netsimd would take for HCI packets.
+- **The machine's side** is `vmtest.py`'s scenario `phone`, after the setup and the typed boot. Its
+  test-only pieces, installed by the scenario alone and in no package: `bluez` (for `btattach`),
+  the unit `kira-test-btattach.service`, and the boot image's hook (mkinitcpio's
+  `kira-test-btattach`, or initramfs-tools' hook and scripts); `bluetooth.service` masked, as the gate
+  takes the adapter whole.
+- **The phone's side** is Marify's `app.marify.vm.RealMachineTest` (androidTest, outside the regular
+  suite), one `am instrument` per stage (`reset`, `scan`, `enrol`, `attest`), its record and software
+  anchor key kept in the app's files between stages. It plays the person: confirms the bind and the
+  SAS, continues a matching boot, approves a changed one when told. It logs `sas=`, `state=`,
+  `code=`, `layout=` under the logcat tag `KiraVm`, which the scenario reads.
+- **What it checks:** the SAS the same on both sides; the hand-over of a phone salt with a keyboard
+  (`luks enrol --salt phone --keyboard-pepper`, 0x1302), no layout there; two boots the phone attests
+  in the initrd (the first `changed` by the image's rebuild, approved and remembered; the second
+  `match`), the boot key proved, the code screen ended by the phone's verdict with no key pressed;
+  the pepper typed at the boot SSH server through the layout the phone shows, the disk open; another
+  layout at the second boot.
+- **What it needs:** the machines of `tools/localvm.py` with `.local/vms/vmtest-local.conf`, the
+  Android SDK (emulator, the system image of Marify's `scripts/test-emulator.sh`), KVM, and no other
+  netsimd running: one netsimd serves every emulator of a user, so it never runs beside Marify's
+  emulator test. Its own AVD `marify-vmtest` boots from wiped data. Logs: `.local/runs/phone-vm-<time>/`.
+- **Under `tools/proof.py --all`** as the part `phone-vm`, both machines one after the other: about
+  25 minutes each.
 
 ## The acceptance run
 

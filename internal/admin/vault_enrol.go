@@ -48,6 +48,9 @@ type VaultEnrolOptions struct {
 	// SecureBootSaid: the caller has said what a machine not on Secure Boot has to know.
 	SecureBootSaid bool
 	Debug          bool
+	// Keyboard: the keyslot takes a pepper of the person's, typed at every boot through the
+	// one-time layout the vault shows with each release. Needs TypedPassword, not Pepper.
+	Keyboard bool
 }
 
 // VaultEnrol enrols the slot with the vault and writes the key to o.Out
@@ -80,6 +83,9 @@ func VaultEnrol(o VaultEnrolOptions) error {
 	}
 	if o.Pepper {
 		recipe |= diskkey.Recipe(diskkey.FlagPepper)
+	}
+	if o.Keyboard {
+		recipe |= diskkey.Recipe(diskkey.FlagKeyboard)
 	}
 	fmt.Printf("    tpm2-kira luks mark <device> --keyslot <the new keyslot> %s --nvram %d\n", recipe.Words(), slot)
 	fmt.Printf("    rm %s\n", o.Out)
@@ -234,17 +240,32 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		}
 		defer wipe.Bytes(pw)
 	}
+	if o.Keyboard && (!o.TypedPassword || o.Pepper) {
+		return nil, 0, errors.New("a pepper typed through the keyboard needs somebody at the machine, --password typed, and no operator's pepper")
+	}
+	var keyboardPepper []byte
+	if o.Keyboard {
+		if keyboardPepper, err = askKeyboardPepper(); err != nil {
+			return nil, 0, err
+		}
+		defer wipe.Bytes(keyboardPepper)
+	}
 	remote, wRemote, err := phonegate.WrapFactor(tpmDev, att, nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer wipe.Bytes(remote)
-	att.Vault = nvslot.VaultAttestation{URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Pepper: pepper != nil}
+	att.Vault = nvslot.VaultAttestation{Keyboard: o.Keyboard, URL: strings.TrimSuffix(o.URL, "/"), Pin: strings.ToLower(o.Pin), Label: label, Pepper: pepper != nil}
 	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
 	var key []byte
 	if o.TypedPassword {
 		salt := vaultkey.Salt(remote, label, pepper)
 		defer wipe.Bytes(salt)
+		if o.Keyboard {
+			plain := salt
+			salt = diskkey.KeyboardSalt(plain, keyboardPepper)
+			defer wipe.Bytes(salt)
+		}
 		if key, err = diskkey.Combine(pw, salt); err != nil {
 			return nil, 0, err
 		}
@@ -286,6 +307,7 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 		Label:            label,
 		Pepper:           pepper != nil,
 		ReleaseKeyPublic: att.ReleaseKeyPublic,
+		Keyboard:         o.Keyboard,
 	}
 	if err := req.Check(); err != nil {
 		return nil, 0, err
@@ -313,6 +335,10 @@ func vaultEnrolKey(o VaultEnrolOptions) ([]byte, uint32, error) {
 	fmt.Printf("Slot %d is enrolled with the vault at %s as device %x (release mode %s).\n", slot, att.Vault.URL, att.DeviceID, res.Mode)
 	fmt.Println("The local part is in the slot's blob, the remote part only with the vault; both")
 	fmt.Println("open at boot, in the initrd, in the boot state the signing key approved.")
+	if o.Keyboard {
+		fmt.Println("With every release the vault shows a one-time keyboard layout (tpm2-kira-vault")
+		fmt.Println("requests, GET /v1/requests), different every time, to type your pepper through.")
+	}
 	if pepper != nil {
 		fmt.Println("The key needs the pepper as well: every boot waits until an operator approves it")
 		fmt.Println("on the vault with that pepper.")

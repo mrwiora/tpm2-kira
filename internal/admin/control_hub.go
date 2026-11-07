@@ -208,7 +208,7 @@ func (c *controller) keysSteps() []controlStep {
 		if s.Vault != "" {
 			desc += ", the vault at " + s.Vault
 		}
-		for _, name := range c.boundKeyslots(s.Slot, append([]diskkey.Recipe{diskkey.RecipePhoneSalt, diskkey.RecipeTPMSalt}, diskkey.VaultRecipes...)...) {
+		for _, name := range c.boundKeyslots(s.Slot, append([]diskkey.Recipe{diskkey.RecipePhoneSalt, diskkey.RecipePhoneKeyboard, diskkey.RecipeTPMSalt}, diskkey.VaultRecipes...)...) {
 			desc += ", " + name
 		}
 		n := s.Slot
@@ -383,7 +383,15 @@ func (c *controller) diskSteps() []controlStep {
 	case !f.Closed:
 		remote.Blocked = "this boot did not pass tpm2-kira's code screen: reboot, then enrol the salt - the phone would otherwise call the boot key refused instead of locked"
 	}
-	return []controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt}
+	keyboard := remote
+	keyboard.Key, keyboard.Title = "luks-remote-keyboard", "Password, salt from the phone, pepper typed through its one-time keyboard (0x1302)"
+	keyboard.Explain = "A LUKS keyslot of 0x1300 with a pepper of yours as well, which nothing keeps: at every boot the phone shows a keyboard layout, other every time, that this TPM opens with the salt; you type the pepper through it, so a recording of the keys is no use. The password is still typed in the clear."
+	keyboard.Run = func(c *controller) error { return c.runLuks(diskkey.RecipePhoneKeyboard) }
+	keyboard.Done = ""
+	if done := c.boundKeyslots(strongSlot(strong), diskkey.RecipePhoneKeyboard); strong != nil && len(done) > 0 {
+		keyboard.Done, keyboard.Blocked = strings.Join(done, ", "), ""
+	}
+	return []controlStep{salt, remote, c.vaultStep(gate, strong), tpmSalt, keyboard}
 }
 
 // debugStep is the boot settings' debug switch, on step 2 itself.
@@ -420,4 +428,12 @@ func (c *controller) runBTAlways() error {
 	c.facts.BTAlways = value == "always"
 	fmt.Fprintf(c.out, "%s: TPM2_KIRA_ATTEST_BLUETOOTH=%s\n", controlConfigPath(), value)
 	return nil
+}
+
+// strongSlot is the slot's number, for a nil-safe look at its keyslots.
+func strongSlot(s *StatusSlot) int {
+	if s == nil {
+		return -1
+	}
+	return s.Slot
 }

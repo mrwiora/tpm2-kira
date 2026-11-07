@@ -35,6 +35,8 @@ vault), flag `0x01` the pepper.
 | `0x1400` password typed, salt from the vault | `--salt vault` | the vault releases the salt while the code screen holds; the password is asked after it |
 | `0x1401` ... with a pepper | `--salt vault --pepper` | the same, once an operator approved with the pepper |
 | `0x1300` password typed, salt from the phone | `--salt phone` | the phone verifies the boot and hands back the salt, the TPM opens it; the password is asked after the code screen |
+| `0x1302` ... with a pepper typed through the phone's one-time keyboard | `--salt phone --keyboard-pepper` | as `0x1300`, and with the salt the TPM opens this boot's layout, which the phone shows; the password, then the pepper through the layout, are asked after the code screen |
+| `0x1402` ... through the vault's | `--salt vault --keyboard-pepper` | as `0x1400`, the layout shown by the vault (its CLI, its REST API) |
 | `0x1200` password typed, salt in this TPM | `--salt tpm` | the TPM opens the salt while the code screen holds; the password is asked after it |
 | `0x1100` recovery: password and salt typed | `--salt typed` | both are asked at tpm2-kira's prompt |
 
@@ -289,6 +291,58 @@ sudo tpm2-kira luks enrol /dev/sda2 --salt vault --pepper --url https://vault:84
 
 Setting up both sides, the protocol, the vault's rules and recovery:
 [VAULT.md](VAULT.md).
+
+## A pepper typed through a one-time keyboard (`0x1302`, `0x1402`)
+
+For a person who wants a secret of their own in the key that no device keeps, typed at the machine,
+and no recording of the keyboard to be of use. The salt stays the phone's or the vault's, 256 bits
+that neither can read. With it, after a good attestation, the phone or the vault releases a seed for
+this boot alone, wrapped for the TPM, and shows the person the layout the seed stands for: on every
+key of the keyboard another character. The person types the pepper by pressing, for each of its
+characters, the key that shows it. The machine opens the seed with the salt, makes the same layout
+and maps the keys back.
+
+```mermaid
+sequenceDiagram
+    participant U as You
+    participant V as Phone or vault
+    participant K as run (initrd)
+    participant T as TPM
+    K->>V: attestation
+    V->>V: the check; a fresh seed
+    V->>K: the salt as ever, and the seed, wrapped for this TPM and the slot's release key
+    K->>T: ActivateCredential of both, before the close
+    V-->>U: the layout of the seed (phone: full screen, landscape; vault: CLI or REST)
+    U->>K: the password, then the pepper through the layout
+    K->>K: pepper = layout(keys); Argon2id(password, HMAC(salt, pepper))
+```
+
+- **Enrolled** with `luks enrol <device> --salt phone --keyboard-pepper` or `--salt vault
+  --keyboard-pepper` (or `phone salt enrol --keyboard-pepper`, `vault enrol --keyboard-pepper`). The
+  pepper is asked twice on the installed system, as it is: 8 to 64 characters of `a`-`z` and `0`-`9`,
+  what the layout has. It goes into the keyslot's key and nowhere else; no check value is kept,
+  which would be an offline test of guesses.
+- **The layout** is a permutation of the 36 keys, Fisher-Yates driven by HMAC-SHA256 of the seed
+  (`core/attest/keyboard.go`), drawn on a US keyboard. Capitals are their keys; Shift adds nothing.
+  Other arrangements can be added beside the US one; the permutation does not change with them.
+- **The seed is released with the salt**: in the same Release from the phone, beside R in the vault's
+  answer, `TPM2_MakeCredential` for the EK and the slot's release key. It opens only in this TPM, in a
+  boot the signing key approved, before the close. Neither the phone nor the vault keeps it: the
+  phone forgets it with the session, the vault shows the layout for 15 minutes, in memory, never in
+  the audit.
+- **A wrong pepper** of the right form makes a key that opens nothing, which goes where any such
+  key goes (above: Debian's `tries=` asks at tpm2-kira's prompt again, the same layout; systemd's own
+  prompt on the others). A pepper of the wrong form is asked for again at once, three times.
+- **Without the salt or the layout**: the recovery recipe, then cryptsetup's own prompt, as for every
+  device-held salt. An operator's pepper (`--pepper`) and this one are not taken together.
+
+**WARNING: one layout holds for the whole boot.** A recording of the keys shows the pepper's length
+and which of its characters repeat (the same key twice), not which they are. A layout per key would
+hide that, but the phone would have to know when each key is pressed. And the layout is the US
+keyboard's: the letter on a key must be what the boot's console receives for it. With an initrd on
+another keymap than the keyboard (US against German: `y` and `z`) those keys are wrong, as they are
+for a password. The password is still typed in the clear, and a machine compromised while attested
+sees keys and layout together. `docs/SECURITY-BACKGROUND.md` §13.5b.
 
 ## The route: where the initrd takes the key from
 

@@ -92,6 +92,11 @@ It may not carry what came before.
   out is in docs/SSH.md, "The close: what it can come to". Every other outcome of the
   close goes on to the passphrase.
   Do not build a mode that holds the boot on the phone's verdict.
+- **A pepper typed through a one-time keyboard is kept by nothing** (`0x1302`, `0x1402`;
+  `core/attest/keyboard.go`): the salt stays the phone's or the vault's, unreadable to them; the seed
+  of the boot's layout is released with it, wrapped for the TPM as well as the channel; the pepper, the
+  keys and the layout never in a log or the audit, no check value of the pepper anywhere
+  (docs/DISK-KEY.md). One layout per boot, the US keyboard's, by the owner's decision (2026-11-06).
 - **The phone channel follows a moved PCR 7 on a person's word alone.**
   Its secrets open with the signing key, which a hook holds too, so a hook's
   approval (`--unattended`, `--if-moved`), or one with no terminal and no flag,

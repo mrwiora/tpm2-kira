@@ -48,7 +48,9 @@ type testVault struct {
 	nonces  map[string][]byte
 	refused []string
 	peppers [][]byte // given with the releases of a pepper device, in turn
-	gave    int
+	// A keyboard device's layout of the last release, as the vault's server shows it.
+	layout *attest.KeyboardLayout
+	gave   int
 }
 
 func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +120,17 @@ func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if rsp.Pepper, err = vaultproto.WrapPepper(rand.Reader, v.enrol.EKPublic, name, v.enrol.DeviceID, v.peppers[v.gave]); err != nil {
+				fail(err.Error())
+				return
+			}
+		}
+		if v.enrol.Keyboard {
+			name, err := v.enrol.ReleaseKeyName()
+			if err != nil {
+				fail(err.Error())
+				return
+			}
+			if rsp.Keyboard, v.layout, err = vaultproto.WrapKeyboard(rand.Reader, v.enrol.EKPublic, name); err != nil {
 				fail(err.Error())
 				return
 			}

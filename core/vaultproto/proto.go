@@ -102,6 +102,11 @@ type EnrolRequest struct {
 	// passes it on once, wrapped for the TPM (ReleaseResponse.Pepper). The
 	// pepper itself is never sent at enrolment; the vault never keeps it.
 	Pepper bool `json:"pepper,omitempty"`
+
+	// Keyboard says the keyslot takes a pepper typed through the vault's one-time keyboard
+	// (keyboard.go): every release carries a seed for this boot alone, wrapped for the TPM, and the
+	// vault shows its layout. Never with Pepper.
+	Keyboard bool `json:"keyboard,omitempty"`
 }
 
 // EnrolChallenge proves the attestation key lives in the TPM holding the
@@ -215,6 +220,7 @@ type ReleaseResponse struct {
 	Status     string         `json:"status"`
 	Remote     *Wrapped       `json:"remote,omitempty"`
 	Pepper     *WrappedPepper `json:"pepper,omitempty"`
+	Keyboard   *Wrapped       `json:"keyboard,omitempty"` // a keyboard device's seed, for its TPM and release key
 	RetryAfter int            `json:"retry_after,omitempty"`
 	Reason     string         `json:"reason,omitempty"`
 }

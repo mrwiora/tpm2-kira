@@ -30,7 +30,7 @@ passphrase, an option it builds on still missing:
 |---|---|
 | Signing key and TOTP codes | the signing key (and a YubiKey's PIN, stored); the standard sealing - slot 0 to the evaluated PCR selection, acknowledged or custom, and slot 1 the fallback; every slot a line, **picking it deletes the slot whole** |
 | Attestation by phone | enrol a phone; Bluetooth in every boot image |
-| Disk unlock | password + salt; password + phone salt (the phone); this TPM + a vault - each a keyslot of its own, enrolled it offers the removal |
+| Disk unlock | password + salt; password + phone salt (the phone); this TPM + a vault, or the password + the vault's salt and a pepper typed through its one-time keyboard; password + phone salt + a pepper typed through the phone's one-time keyboard - each a keyslot of its own, enrolled it offers the removal |
 | Network and SSH at boot | the image's network (DHCP or static, proposed from the running system); the SSH server with the code screen |
 
 An option that needs another one control can set up offers it on the

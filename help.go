@@ -625,23 +625,27 @@ keyscript asks at askpass directly.
 	"vault": vaultUsage,
 
 	"luks": `tpm2-kira luks status [<device>…] [--json]
-tpm2-kira luks enrol  <device> [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [options]
+tpm2-kira luks enrol  <device> [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper|--keyboard-pepper] [options]
 tpm2-kira luks remove <device> --keyslot N
 tpm2-kira luks route  [<device>…] [--cmdline FILE]… [--crypttab FILE] [--json]
-tpm2-kira luks mark   <device> --keyslot N [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper] [options]
+tpm2-kira luks mark   <device> --keyslot N [--password typed|tpm] --salt typed|tpm|phone|vault [--pepper|--keyboard-pepper] [options]
 tpm2-kira luks derive --out PATH
 
 tpm2-kira's LUKS keyslots. A keyslot's key is always the combiner's
 (Argon2id) of a password and a salt; its recipe says where each comes
 from, as a number 0xPSFF - P the password (1 typed at the machine, 2 held
 by this TPM: unattended), S the salt (1 typed: the recovery recipe, 2 this
-TPM, 3 the phone, 4 the vault), flag 0x01 the vault's pepper:
+TPM, 3 the phone, 4 the vault), flag 0x01 the vault's pepper, 0x02 a pepper
+typed through a one-time keyboard (nothing keeps it):
 
   0x1100  --salt typed                     recovery: password and salt typed
   0x1200  --salt tpm                       password typed, salt in this TPM
   0x1300  --salt phone                     password typed, salt from the phone
   0x1400  --salt vault                     password typed, salt from the vault
   0x1401  --salt vault --pepper            ... with an operator's pepper
+  0x1302  --salt phone --keyboard-pepper  ... with a pepper of yours, typed through the one-time
+                                           keyboard layout the phone shows, other at every boot
+  0x1402  --salt vault --keyboard-pepper  ... the vault's layout (tpm2-kira-vault requests, its REST API)
   0x2400  --password tpm --salt vault      unattended: this TPM and the vault
   0x2401  --password tpm --salt vault --pepper
 

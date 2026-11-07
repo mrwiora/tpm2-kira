@@ -14,8 +14,9 @@ import (
 // The password is typed by the person in front of the machine - nothing on
 // the machine holds it - or, in an unattended recipe, held by this TPM.
 // The salt is held by a device - this TPM, the phone, the vault - or typed,
-// in the recovery recipe alone. The pepper is a person's, entered at the
-// vault's approval, and goes into the salt.
+// in the recovery recipe alone. A pepper goes into the salt: an operator's,
+// entered at the vault's approval, or the person's own, typed at the machine
+// through the one-time keyboard of the phone or the vault.
 type Recipe uint16
 
 // The sources of the password (P) and of the salt (S).
@@ -34,6 +35,10 @@ const (
 	// FlagPepper: the vault releases the salt with an operator's pepper,
 	// which goes into the salt.
 	FlagPepper uint8 = 0x01
+	// FlagKeyboard: with the salt the phone or the vault gives the machine a one-time keyboard,
+	// and the person types a pepper of their own through it (core/attest/keyboard.go). No device
+	// holds that pepper.
+	FlagKeyboard uint8 = 0x02
 )
 
 // The recipes. Every other number is refused (Recipe.Check).
@@ -43,19 +48,22 @@ const (
 	RecipePhoneSalt             Recipe = 0x1300 // password typed, salt from the phone
 	RecipeVaultSalt             Recipe = 0x1400 // password typed, salt from the vault
 	RecipeVaultSaltPepper       Recipe = 0x1401 // password typed, salt from the vault with a pepper
+	RecipePhoneKeyboard         Recipe = 0x1302 // password typed, salt from the phone, a pepper typed through its keyboard
+	RecipeVaultKeyboard         Recipe = 0x1402 // password typed, salt from the vault, a pepper typed through its keyboard
 	RecipeUnattendedVault       Recipe = 0x2400 // password in this TPM, salt from the vault
 	RecipeUnattendedVaultPepper Recipe = 0x2401 // password in this TPM, salt from the vault with a pepper
 )
 
 // VaultRecipes are the recipes whose salt the vault releases.
-var VaultRecipes = []Recipe{RecipeUnattendedVault, RecipeUnattendedVaultPepper, RecipeVaultSalt, RecipeVaultSaltPepper}
+var VaultRecipes = []Recipe{RecipeUnattendedVault, RecipeUnattendedVaultPepper, RecipeVaultSalt, RecipeVaultSaltPepper, RecipeVaultKeyboard}
 
 // Recipes are every recipe, in the order a volume's keyslots are tried at
 // boot: what needs nobody first, then a device-held salt with the typed
 // password, the recovery recipe last.
 var Recipes = []Recipe{
 	RecipeUnattendedVault, RecipeUnattendedVaultPepper,
-	RecipeVaultSalt, RecipeVaultSaltPepper, RecipePhoneSalt, RecipeTPMSalt,
+	RecipeVaultSalt, RecipeVaultSaltPepper, RecipeVaultKeyboard,
+	RecipePhoneSalt, RecipePhoneKeyboard, RecipeTPMSalt,
 	RecipeRecovery,
 }
 
@@ -69,6 +77,12 @@ func (r Recipe) flags() uint8 { return uint8(r & 0xFF) }
 
 // Pepper says the vault releases the salt with an operator's pepper.
 func (r Recipe) Pepper() bool { return r.flags()&FlagPepper != 0 }
+
+// Keyboard says a pepper is typed through the one-time keyboard of the phone or the vault.
+func (r Recipe) Keyboard() bool { return r.flags()&FlagKeyboard != 0 }
+
+// FromPhone says the phone holds the salt.
+func (r Recipe) FromPhone() bool { return r.Salt() == SaltPhone }
 
 // FromVault says the vault releases the salt.
 func (r Recipe) FromVault() bool { return r.Salt() == SaltVault }
@@ -89,10 +103,16 @@ func (r Recipe) Check() error {
 		return fmt.Errorf("recipe %s: no password source %#x", r, p)
 	case s < SaltTyped || s > SaltVault:
 		return fmt.Errorf("recipe %s: no salt source %#x", r, s)
-	case f&^FlagPepper != 0:
+	case f&^(FlagPepper|FlagKeyboard) != 0:
 		return fmt.Errorf("recipe %s: unknown flags %#02x", r, f)
 	case p == PasswordTPM && s != SaltVault:
 		return fmt.Errorf("recipe %s: a password held by this TPM needs a salt from the vault - password and salt both on the machine distribute nothing", r)
+	case r.Keyboard() && p != PasswordTyped:
+		return fmt.Errorf("recipe %s: a pepper typed through the keyboard needs somebody at the machine, and so a typed password", r)
+	case r.Keyboard() && s != SaltPhone && s != SaltVault:
+		return fmt.Errorf("recipe %s: the keyboard comes from the phone or the vault", r)
+	case r.Keyboard() && r.Pepper():
+		return fmt.Errorf("recipe %s: one pepper: the operator's or the one typed through the keyboard", r)
 	case r.Pepper() && s != SaltVault:
 		return fmt.Errorf("recipe %s: a pepper is entered at the vault's approval and needs a salt from the vault", r)
 	}
@@ -100,8 +120,8 @@ func (r Recipe) Check() error {
 }
 
 // RecipeOf is the recipe of the command line's words: the password's
-// source (typed, tpm), the salt's (typed, tpm, phone, vault), the pepper.
-func RecipeOf(password, salt string, pepper bool) (Recipe, error) {
+// source (typed, tpm), the salt's (typed, tpm, phone, vault), the pepper, the keyboard.
+func RecipeOf(password, salt string, pepper, keyboard bool) (Recipe, error) {
 	var p, s uint8
 	switch password {
 	case "typed":
@@ -126,6 +146,9 @@ func RecipeOf(password, salt string, pepper bool) (Recipe, error) {
 	var f uint8
 	if pepper {
 		f |= FlagPepper
+	}
+	if keyboard {
+		f |= FlagKeyboard
 	}
 	r := Recipe(uint16(p)<<12 | uint16(s)<<8 | uint16(f))
 	if err := r.Check(); err != nil {
@@ -163,6 +186,9 @@ func (r Recipe) Words() string {
 	if r.Pepper() {
 		w += " --pepper"
 	}
+	if r.Keyboard() {
+		w += " --keyboard-pepper"
+	}
 	return w
 }
 
@@ -174,6 +200,9 @@ func (r Recipe) Describe() string {
 	var notes []string
 	if r.Pepper() {
 		notes = append(notes, "pepper")
+	}
+	if r.Keyboard() {
+		notes = append(notes, "pepper typed through a one-time keyboard")
 	}
 	d := r.String() + " " + pw + " · " + salt
 	if len(notes) > 0 {

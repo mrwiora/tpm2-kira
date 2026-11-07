@@ -209,6 +209,9 @@ func ServeAttestation(conn Conn, id *AttestIdentity, be AttesterBackend, progres
 	fb, _ := be.(FactorBackend)
 	if fb != nil {
 		ev.FactorKeep = fb.FactorToKeep()
+		if kb, ok := be.(KeyboardBackend); ok && ev.FactorKeep != nil {
+			ev.KeyboardKeep = kb.KeyboardToKeep()
+		}
 	}
 	evlog, _ := be.Eventlog()
 	var evlogHash []byte

@@ -311,7 +311,7 @@ func statusNotes(r StatusReport) []string {
 					notes = append(notes, fmt.Sprintf("%s keyslot %d needs the TPM salt of slot %d, which has none: tpm2-kira luks remove %s --keyslot %d, then luks enrol again", d.Device, ks.Keyslot, *ks.Token.Slot, d.Device, ks.Keyslot))
 				}
 			}
-			if ks.Token.Recipe == diskkey.RecipePhoneSalt {
+			if ks.Token.Recipe.FromPhone() {
 				ok := false
 				for _, s := range r.Slots {
 					if s.Slot == *ks.Token.Slot && s.PhoneSalt {
@@ -335,7 +335,7 @@ func statusNotes(r StatusReport) []string {
 	if vault && headersRead && vaultMarked == 0 {
 		notes = append(notes, "a slot is enrolled with a vault, but no LUKS keyslot is marked with a vault recipe: its key opens nothing (tpm2-kira luks mark <device> --keyslot N --salt vault ...)")
 	}
-	if remoteSalt && headersRead && marked[diskkey.RecipePhoneSalt] == 0 {
+	if remoteSalt && headersRead && marked[diskkey.RecipePhoneSalt]+marked[diskkey.RecipePhoneKeyboard] == 0 {
 		notes = append(notes, "a phone salt is enrolled, but no LUKS keyslot is marked with the phone's salt: the phone's salt opens nothing (tpm2-kira luks enrol <device> "+diskkey.RecipePhoneSalt.Words()+")")
 	}
 	return notes

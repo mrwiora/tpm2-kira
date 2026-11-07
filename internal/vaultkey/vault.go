@@ -574,10 +574,11 @@ func isVerification(err error) bool {
 // the key provider to answer with: an unattended recipe's key, a typed
 // recipe's salt; done is closed when every slot has been tried.
 type Keys struct {
-	keys  map[int][]byte
-	salts map[int][]byte
-	errs  map[int]error
-	done  chan struct{}
+	keys      map[int][]byte
+	salts     map[int][]byte
+	keyboards map[int]*KeyboardSession
+	errs      map[int]error
+	done      chan struct{}
 }
 
 // startVaultKeys opens, in the background, the key of every slot with the
@@ -595,7 +596,7 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 		tpmDev.Close()
 		return nil
 	}
-	vk := &Keys{keys: map[int][]byte{}, salts: map[int][]byte{}, errs: map[int]error{}, done: make(chan struct{})}
+	vk := &Keys{keys: map[int][]byte{}, salts: map[int][]byte{}, keyboards: map[int]*KeyboardSession{}, errs: map[int]error{}, done: make(chan struct{})}
 	go func() {
 		defer close(vk.done)
 		defer tpmDev.Close()
@@ -606,6 +607,19 @@ func Start(ctx context.Context, tpmPath string, out io.Writer, log func(string),
 				log(fmt.Sprintf("vault: slot %d: %s", n, s))
 			}
 			say(fmt.Sprintf("asking the vault at %s for the disk's remote part ...", vs.Att.Vault.URL))
+			if vs.Att.Vault.Keyboard {
+				salt, sess, err := OpenKeyboard(ctx, tpmDev, vs, say)
+				if err != nil {
+					vk.errs[n] = err
+					fmt.Fprintf(out, "%s \033[0;31mSlot #%d: nothing from the vault:\033[0m %s\n", screen.Tag(screen.TagYellow), n, Problem(err))
+					log(fmt.Sprintf("vault: slot %d: no keyboard: %s", n, Problem(err)))
+					continue
+				}
+				vk.salts[n], vk.keyboards[n] = salt, sess
+				fmt.Fprintf(out, "%s \033[0;32mSlot #%d: the vault released the salt and a one-time keyboard; password and pepper are asked after the code screen.\033[0m\n", screen.Tag(screen.TagYellow), n)
+				log(fmt.Sprintf("vault: slot %d: released; the salt and the keyboard are opened", n))
+				continue
+			}
 			key, salt, err := Open(ctx, tpmDev, vs, say)
 			if err != nil {
 				vk.errs[n] = err
@@ -679,7 +693,7 @@ func (vk *Keys) ForVolume(volume string) ([]byte, error) {
 }
 
 // SaltFor is the salt for a volume whose keyslot has a vault recipe with a
-// typed password (0x1400, 0x1401): the salt of the slot its token is bound
+// typed password (0x1400, 0x1401, 0x1402): the salt of the slot its token is bound
 // to, or nil. It waits for the attempt to end. The caller wipes it.
 func (vk *Keys) SaltFor(volume string, r diskkey.Recipe) []byte {
 	if vk == nil {
@@ -692,6 +706,23 @@ func (vk *Keys) SaltFor(volume string, r diskkey.Recipe) []byte {
 	}
 	if salt, ok := vk.salts[*tok.Slot]; ok {
 		return append([]byte(nil), salt...)
+	}
+	return nil
+}
+
+// KeyboardFor is the vault's one-time keyboard for a volume whose keyslot has such a recipe, or nil.
+// It waits for the attempt to end.
+func (vk *Keys) KeyboardFor(volume string, r diskkey.Recipe) diskkey.KeyboardSession {
+	if vk == nil {
+		return nil
+	}
+	<-vk.done
+	tok, err := diskkey.TokenOf(volume, r)
+	if err != nil || tok.Slot == nil {
+		return nil
+	}
+	if sess, ok := vk.keyboards[*tok.Slot]; ok {
+		return sess
 	}
 	return nil
 }

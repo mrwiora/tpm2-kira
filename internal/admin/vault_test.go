@@ -97,6 +97,18 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 		t.Fatalf("json %s", js)
 	}
 
+	// The keyboard's flag is kept, and without it nothing else changes.
+	kb := *a
+	kb.Vault.Local, kb.Vault.Keyboard = nvslot.WrappedFactor{}, true
+	if rawKb, err := kb.Marshal(); err != nil {
+		t.Fatal(err)
+	} else if got, err := nvslot.UnmarshalAttestation(rawKb); err != nil || !got.Vault.Keyboard || got.Vault.Pepper || got.Vault.Unattended() {
+		t.Fatalf("the keyboard's flag: %+v, %v", got, err)
+	}
+	if b.Vault.Keyboard {
+		t.Fatal("a keyboard out of nothing")
+	}
+
 	// The pin is kept as its 32 bytes: the text's case does not matter,
 	// a pin that is not one is not written.
 	upper := *a
@@ -135,8 +147,8 @@ func TestVaultMethodInTheBlob(t *testing.T) {
 	// Read: the check cut to 3 bytes, its prefix and the vault method's
 	// length (the last method: [type 2][len:4], its data to the end) told
 	// so - the record is whole but for the check's size.
-	short := append([]byte(nil), raw[:good-nvslot.PepperCheckSize-2]...)
-	short = append(short, 3, 0, 1, 2, 3)
+	short := append([]byte(nil), raw[:good-nvslot.PepperCheckSize-3]...) // past it the keyboard's byte
+	short = append(short, 3, 0, 1, 2, 3, 0)
 	header := -1
 	for i := len(raw) - 5; i >= 0; i-- {
 		if raw[i] == nvslot.AttestMethodVault && int(binary.LittleEndian.Uint32(raw[i+1:])) == good-(i+5) {
@@ -233,15 +245,15 @@ func TestDiskKeyFromTheVault(t *testing.T) {
 		t.Fatalf("asked for %s", what)
 		return nil, nil
 	}
-	key, err := diskkey.DiskKey(nil, func(string) ([]byte, error) { return []byte("k"), nil }, recipeOf(diskkey.RecipeUnattendedVault), noAsk)("cryptroot")
+	key, err := diskkey.DiskKey(nil, nil, func(string) ([]byte, error) { return []byte("k"), nil }, recipeOf(diskkey.RecipeUnattendedVault), noAsk)("cryptroot")
 	if err != nil || string(key) != "k" {
 		t.Fatalf("%q %v", key, err)
 	}
-	_, err = diskkey.DiskKey(nil, func(string) ([]byte, error) { return nil, errors.New("the vault refused") }, recipeOf(diskkey.RecipeUnattendedVault), noAsk)("cryptroot")
+	_, err = diskkey.DiskKey(nil, nil, func(string) ([]byte, error) { return nil, errors.New("the vault refused") }, recipeOf(diskkey.RecipeUnattendedVault), noAsk)("cryptroot")
 	if !errors.Is(err, diskkey.ErrUnlockSkipped) || !strings.Contains(err.Error(), "the vault refused") {
 		t.Fatalf("%v", err)
 	}
-	if _, err := diskkey.DiskKey(nil, nil, recipeOf(diskkey.RecipeUnattendedVault), noAsk)("cryptroot"); !errors.Is(err, diskkey.ErrUnlockSkipped) {
+	if _, err := diskkey.DiskKey(nil, nil, nil, recipeOf(diskkey.RecipeUnattendedVault), noAsk)("cryptroot"); !errors.Is(err, diskkey.ErrUnlockSkipped) {
 		t.Fatalf("no vault in this boot: %v", err)
 	}
 }
@@ -265,14 +277,14 @@ func TestTheTypedKeyslotIsTheVaultsFallback(t *testing.T) {
 		return []byte("typed-" + what), nil
 	}
 	refused := func(string) ([]byte, error) { return nil, errors.New("the device is revoked") }
-	key, err := diskkey.DiskKey(nil, refused, recipeOf(modes...), ask)("cryptroot")
+	key, err := diskkey.DiskKey(nil, nil, refused, recipeOf(modes...), ask)("cryptroot")
 	if err != nil || len(key) == 0 {
 		t.Fatalf("no key from the typed keyslot: %v", err)
 	}
 	if strings.Join(asked, ",") != "Password,Salt" || !strings.Contains(note, "no key from the vault (the device is revoked)") {
 		t.Fatalf("asked %q, note %q", asked, note)
 	}
-	want, _ := diskkey.DiskKey(nil, nil, recipeOf(diskkey.RecipeRecovery), ask)("cryptroot")
+	want, _ := diskkey.DiskKey(nil, nil, nil, recipeOf(diskkey.RecipeRecovery), ask)("cryptroot")
 	if string(key) != string(want) {
 		t.Fatal("the fallback's key is not the recovery recipe's key")
 	}

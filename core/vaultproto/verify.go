@@ -69,6 +69,9 @@ func (r *EnrolRequest) Check() error {
 	if len(r.Remote.Credential) == 0 || len(r.Remote.EncryptedSecret) == 0 {
 		return errors.New("no wrapped remote part")
 	}
+	if r.Keyboard && r.Pepper {
+		return errors.New("a pepper typed through the keyboard and an operator's pepper are not taken together")
+	}
 	if _, err := r.ReleaseKeyName(); err != nil {
 		return err
 	}
