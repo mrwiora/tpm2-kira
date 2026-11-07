@@ -32,6 +32,90 @@ type DemoMachine struct {
 	notes  chan []byte
 	result chan string
 	sas    string
+
+	// A phone salt with a keyboard (EnableKeyboard): handed over in the next attestation, then
+	// released with a seed at every one after it; layout is what the last release opened.
+	kb     *demoKeyboard
+	layout string
+}
+
+// demoKeyboard is the machine's side of a phone salt with a pepper typed through the keyboard.
+type demoKeyboard struct {
+	keeping bool
+	name    []byte
+	keep    *attest.KeyboardKeep
+	factor  *attest.FactorBlob
+}
+
+// keyboardBackend is the software TPM as the machine's gate is with such a keyslot: it offers the
+// phone salt and the keyboard to keep once, and opens the seed of every release after.
+type keyboardBackend struct {
+	*attesttest.SoftTPM
+	d *DemoMachine
+}
+
+func (b *keyboardBackend) FactorToKeep() *attest.FactorBlob {
+	b.d.mu.Lock()
+	defer b.d.mu.Unlock()
+	if b.d.kb.keeping {
+		return b.d.kb.factor
+	}
+	return nil
+}
+
+func (b *keyboardBackend) KeyboardToKeep() *attest.KeyboardKeep {
+	b.d.mu.Lock()
+	defer b.d.mu.Unlock()
+	if b.d.kb.keeping {
+		return b.d.kb.keep
+	}
+	return nil
+}
+
+func (b *keyboardBackend) TakeRelease(r *attest.Release) (uint8, string) {
+	b.d.mu.Lock()
+	defer b.d.mu.Unlock()
+	if b.d.kb.keeping {
+		b.d.kb.keeping = false
+		return attest.ReleaseOK, "the phone keeps the phone salt"
+	}
+	if r.KeyboardCredential == nil {
+		return attest.ReleaseOK, "the TPM opened the salt"
+	}
+	seed, err := b.ActivateCredentialFor(b.d.kb.name, r.KeyboardCredential, r.KeyboardSecret)
+	if err != nil {
+		return attest.ReleaseTPMRefused, "the TPM did not open the keyboard: " + err.Error()
+	}
+	l, err := attest.KeyboardLayoutOf(seed)
+	if err != nil {
+		return attest.ReleaseTPMRefused, err.Error()
+	}
+	b.d.layout = l.String()
+	return attest.ReleaseOK, "the TPM opened the salt and the keyboard"
+}
+
+// EnableKeyboard gives the machine a keyslot of a phone salt with a pepper typed through the
+// phone's one-time keyboard: the next attestation hands both over, every one after it releases the
+// salt with a seed, and the phone shows the layout.
+func (d *DemoMachine) EnableKeyboard() error {
+	public, name, err := d.m.TPM.ReleaseKey(d.m.TPM.SigningPub, d.m.TPM.PolicyRef)
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.kb = &demoKeyboard{keeping: true, name: name,
+		keep:   &attest.KeyboardKeep{ReleaseKeyPublic: public, SigningPublic: d.m.TPM.SigningPub, PolicyRef: d.m.TPM.PolicyRef},
+		factor: &attest.FactorBlob{CredentialBlob: []byte("demo credential"), EncryptedSecret: []byte("demo secret"), Label: "luks"}}
+	return nil
+}
+
+// KeyboardLayout is the layout the machine's TPM opened in the last attestation, in the order of
+// attest.KeyboardKeys, or "".
+func (d *DemoMachine) KeyboardLayout() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.layout
 }
 
 // NewDemoMachine creates a machine named "Thinkpad-X1" quoting PCRs 0,2,4,7.
@@ -116,7 +200,14 @@ func (d *DemoMachine) StartAttestation(mtu int) error {
 		return errors.New("kiratest: enrol first")
 	}
 	return d.start(mtu, func(c *frame.Conn) string {
-		res, err := attest.ServeAttestation(c, d.m.AttestIdentity(), d.m.TPM, nil)
+		var be attest.AttesterBackend = d.m.TPM
+		d.mu.Lock()
+		if d.kb != nil {
+			be = &keyboardBackend{SoftTPM: d.m.TPM, d: d}
+		}
+		d.layout = ""
+		d.mu.Unlock()
+		res, err := attest.ServeAttestation(c, d.m.AttestIdentity(), be, nil)
 		if res == nil || res.Receipt == nil {
 			if err == nil {
 				err = errors.New("no receipt")

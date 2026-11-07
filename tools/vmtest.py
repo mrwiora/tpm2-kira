@@ -1705,35 +1705,60 @@ class Machine:
         out = vault.admin("audit")
         self.check("the vault's audit holds no pepper", self.PEPPER not in out, out[-300:])
 
+    KB_PEPPER = "vmtest9pepper"
+
+    def vault_layout(self, vault, name, seen=(), timeout=120):
+        """The one-time layout the vault's CLI shows for the latest release of name, none of seen: key
+        -> what it types."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            out = vault.admin("requests")
+            at = out.rfind("of " + name + ": type the pepper through this layout")
+            if at >= 0:
+                layout = {}
+                lines = out[at:].splitlines()[1:9]
+                for keys, types in zip(lines[0::2], lines[1::2]):
+                    k, t = keys.split()[1:], types.split()[1:]
+                    if len(k) != len(t) or keys.split()[0] != "key" or types.split()[0] != "types":
+                        return None
+                    layout.update(zip(k, t))
+                if len(layout) != 36:
+                    return None
+                if layout not in seen:
+                    return layout
+            time.sleep(1)
+        return None
+
     def vault_keyboard(self):
-        """The salt typed through the vault's one-time keyboard, with a pepper (0x1403): the keys the
-        vault's CLI shows, typed at the prompt over SSH; wrong ones are refused; then the operator
-        approves with the pepper. A second boot's keys are others, and nothing of them is in the audit."""
+        """A pepper typed through the vault's one-time keyboard (0x1402): the layout the vault's CLI
+        shows, the pepper typed through it at the prompt over SSH; one not of the layout's form is
+        asked for again. A second boot's layout is another, and neither layout nor pepper is in the
+        audit."""
         vault = self.vault_of_run
-        self.head("the salt typed through the vault's one-time keyboard, with a pepper (0x1403)")
+        self.head("a pepper typed through the vault's one-time keyboard (0x1402)")
         self.vault_leave(vault)
         name = self.name + "-keyboard"
         url, pin, token = self.vault_token(vault, name)
-        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --pepper --keyboard --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {name}", "luks-enrol-vault-keyboard")
+        s = self.session(f"sudo tpm2-kira luks enrol {self.luks_dev} --salt vault --keyboard-pepper --url {url} --pin {pin} --token {token} --ca {self.CA_FILE} --name {name}", "luks-enrol-vault-keyboard")
         try:
-            s.expect(r"Pepper \(the operator gives it with every approval on the vault\): ?$", 300); s.send(self.PEPPER + "\n")
-            s.expect(r"The same pepper again: ?$", 60); s.send(self.PEPPER + "\n")
-            s.expect(r"Password \(typed at the machine at every boot\): ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"Password \(typed at the machine at every boot\): ?$", 300); s.send(VAULT_PASSWORD + "\n")
             s.expect(r"The same password again: ?$", 60); s.send(VAULT_PASSWORD + "\n")
+            s.expect(r"Pepper: ?$", 60); s.send(self.KB_PEPPER + "\n")
+            s.expect(r"The same pepper again: ?$", 60); s.send(self.KB_PEPPER + "\n")
             s.expect(r"to authorise: ?$", 600); s.send(self.luks_pass + "\n")
-            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1403 ", 300)
+            _, m = s.expect(r"keyslot (\d+) added: tpm2-kira, 0x1402 ", 300)
             self.vault_keyslot, self.vault_device = m.group(1), name
             s.wait_end(120)
-            self.check("luks enrol --salt vault --pepper --keyboard: a keyslot of recipe 0x1403", True)
+            self.check("luks enrol --salt vault --keyboard-pepper: a keyslot of recipe 0x1402", True)
         except Fail as e:
-            self.check("luks enrol --keyboard", False, str(e))
+            self.check("luks enrol --keyboard-pepper", False, str(e))
             raise
         finally:
             s.close()
         rc, out = self.run("tpm2-kira status 2>&1", save="status-vault-keyboard.log")
-        self.check("status: the keyboard's recipe", "typed through a one-time keyboard" in out, out[-500:])
+        self.check("status: the keyboard's recipe", "pepper typed through a one-time keyboard" in out, out[-500:])
 
-        keys_seen = []
+        layouts = []
         for boot in (1, 2):
             self.head(f"boot {boot} through the vault's keyboard")
             self.run("systemctl reboot")
@@ -1744,41 +1769,31 @@ class Machine:
             try:
                 text, _ = s.expect(r"Does the code match your authenticator\?.*$", 120)
                 self.after_resume_boot(text)
-                keys = None
-                deadline = time.time() + 120
-                while time.time() < deadline and keys is None:
-                    m = re.search(r"of " + re.escape(name) + r": press these keys at the machine: (\S+)", vault.admin("requests"))
-                    keys = m.group(1) if m else None
-                    time.sleep(1) if keys is None else None
-                if not self.check(f"keyboard {boot}: the vault's CLI shows the keys", keys is not None):
-                    raise Fail("no keys shown")
-                keys_seen.append(keys)
+                layout = self.vault_layout(vault, name, layouts)
+                if not self.check(f"keyboard {boot}: the vault's CLI shows a layout of the 36 keys", layout is not None and sorted(layout.values()) == sorted(layout.keys())):
+                    raise Fail("no layout shown")
+                layouts.append(layout)
+                typed = "".join(next(k for k, t in layout.items() if t == c) for c in self.KB_PEPPER)
                 s.send("\r")
                 text, _ = s.expect(r"Password for disk \S+: ?$", 300)
-                self.check(f"keyboard {boot}: the prompt says to press what the vault shows", "press the keys the vault shows" in text, text[-500:])
+                self.check(f"keyboard {boot}: the prompt says to type the pepper through the vault's layout", "layout the vault shows" in text, text[-500:])
                 s.send(VAULT_PASSWORD + "\r")
-                s.expect(r"Keys for disk \S+: ?$", 60)
-                wrong = keys[::-1] if keys[::-1] != keys else "a" * len(keys)
-                s.send(wrong + "\r")
-                text, _ = s.expect(r"Keys for disk \S+: ?$", 60)
-                self.check(f"keyboard {boot}: wrong keys are refused and asked for again", "not the keys shown" in text, text[-400:])
-                s.send(keys + "\r")
-                rid = vault.pending(name, 120)
-                if not self.check(f"keyboard {boot}: right keys, and the boot waits for the pepper", rid is not None):
-                    raise Fail("no pending request")
-                rc, out = vault.admin_input("a\n" + self.PEPPER + "\n", "requests", "answer")
-                self.log.save(f"vault-keyboard-answer-{boot}.log", out)
-                self.check(f"keyboard {boot}: the operator approves with the pepper, after the keys", rc == 0 and "approved" in out, out[-400:])
+                s.expect(r"Pepper for disk \S+: ?$", 60)
+                s.send("ab-cd\r")
+                text, _ = s.expect(r"Pepper for disk \S+: ?$", 60)
+                self.check(f"keyboard {boot}: what is no pepper is asked for again", "not a pepper" in text, text[-400:])
+                s.send(typed + "\r")
                 s.wait_end(600)
             finally:
                 s.close()
-            if not self.check(f"keyboard {boot}: the disk opens with password, keys and pepper", self.wait_port(22, True, 300)):
+            if not self.check(f"keyboard {boot}: the disk opens with password, salt and the pepper through the layout", self.wait_port(22, True, 300)):
                 raise Fail("the keyboard's boot did not come up")
             self.booted(f"keyboard {boot}")
-        self.check("the second boot's keys are others", keys_seen[0] != keys_seen[1], str(len(keys_seen)))
+        self.check("the second boot's layout is another", len(layouts) == 2 and layouts[0] != layouts[1], str(len(layouts)))
         out = vault.admin("audit")
         self.log.save("vault-audit-keyboard.log", out)
-        self.check("the vault's audit holds neither keys nor pepper", self.PEPPER not in out and not any(k in out for k in keys_seen), out[-300:])
+        shown = ["".join(l[k] for k in "abcdefghijklmnopqrstuvwxyz0123456789") for l in layouts]
+        self.check("the vault's audit holds neither layout nor pepper", self.KB_PEPPER not in out and not any(x in out for x in shown), out[-300:])
 
     def slot_life(self):
         self.head("a slot's life")

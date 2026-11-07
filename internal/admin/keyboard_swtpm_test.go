@@ -5,7 +5,7 @@ package admin
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -67,55 +67,65 @@ func TestPhoneKeyboardOnATPM(t *testing.T) {
 		t.Fatal(err)
 	}
 	tpmdev.FlushHandle(tpm, ek.Handle)
-	salt := []byte("abcd2345")
-	release := func() (*attest.Release, []byte) {
-		secret := make([]byte, attest.KeyboardSecretSize)
-		if _, err := rand.Read(secret); err != nil {
-			t.Fatal(err)
-		}
-		pad, err := attest.KeyboardPadFrom(secret, len(salt))
+	f, w, err := phonegate.WrapFactor(tpm, att, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pepper := []byte("correct9horse")
+	release := func() (*attest.Release, *attest.KeyboardLayout) {
+		seed, err := attest.NewKeyboardSeed(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys, err := attest.KeyboardKeys(salt, pad)
+		layout, err := attest.KeyboardLayoutOf(seed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		blob, enc, err := attest.MakeCredential(nil, ekPub, name, secret)
+		blob, enc, err := attest.MakeCredential(nil, ekPub, name, seed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &attest.Release{Kind: attest.ReleaseKindKeyboard, Slot: uint8(nvslot.SlotNumber(slot)), CredentialBlob: blob, EncryptedSecret: enc, Label: "luks"}, keys
+		return &attest.Release{Kind: attest.ReleaseKindFactor, Slot: uint8(nvslot.SlotNumber(slot)), CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret,
+			Label: "luks", KeyboardCredential: blob, KeyboardSecret: enc}, layout
 	}
 
 	svc := phonegate.NewGateService(tpm, slot, pubPath, false)
-	r, keys := release()
+	r, layout := release()
 	status, msg := svc.TakeRelease(r)
-	if status != attest.ReleaseOK {
-		t.Fatalf("the TPM did not open the pad: %d %s", status, msg)
+	if status != attest.ReleaseOK || !strings.Contains(msg, "keyboard") {
+		t.Fatalf("the TPM did not open salt and seed: %d %s", status, msg)
+	}
+	if got := svc.Salt(); !bytes.Equal(got, phonegate.FactorSalt(f, "luks")) {
+		t.Fatal("not the phone salt")
 	}
 	sess := svc.KeyboardSession()
 	if sess == nil {
 		t.Fatal("no keyboard")
 	}
-	got, err := sess.Salt(keys)
+	keys, err := layout.Keys(pepper)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := phonegate.FactorSalt(salt, "luks"); !bytes.Equal(got, want) {
-		t.Fatalf("keys and pad make %s, not %s", got, want)
+	got, err := sess.Pepper(keys)
+	if err != nil || !bytes.Equal(got, pepper) {
+		t.Fatalf("the keys of the phone's layout make %s, not %s: %v", got, pepper, err)
 	}
-	if _, err := sess.Salt([]byte("not keys")); !errors.Is(err, diskkey.ErrWrongKeys) {
-		t.Fatalf("keys outside the alphabet: %v", err)
+	if _, err := sess.Pepper([]byte("not keys")); !errors.Is(err, diskkey.ErrNotAPepper) {
+		t.Fatalf("keys outside the layout: %v", err)
 	}
-	wrong, err := sess.Salt([]byte("aaaaaaaa"))
-	if err != nil || bytes.Equal(wrong, got) {
-		t.Fatalf("wrong keys gave the salt: %v", err)
+
+	// A release without a seed opens the salt alone: no keyboard.
+	plain := phonegate.NewGateService(tpm, slot, pubPath, false)
+	r, _ = release()
+	r.KeyboardCredential, r.KeyboardSecret = nil, nil
+	if status, _ := plain.TakeRelease(r); status != attest.ReleaseOK || plain.KeyboardSession() != nil || plain.Salt() == nil {
+		t.Fatalf("without a seed: %d", status)
 	}
 
 	// On the booted system nothing is opened: the phone only says it keeps the salt.
 	keep := phonegate.NewGateService(tpm, slot, pubPath, false)
-	keep.KeepKeyboard(&attest.KeyboardKeep{Salt: salt})
+	keep.Keep(&attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: "luks"})
+	keep.KeepKeyboard(&attest.KeyboardKeep{ReleaseKeyPublic: att.ReleaseKeyPublic})
 	r, _ = release()
 	if status, _ := keep.TakeRelease(r); status != attest.ReleaseOK || !keep.Returned() || keep.KeyboardSession() != nil {
 		t.Fatalf("the hand-over: %d, returned %v", status, keep.Returned())
@@ -129,90 +139,82 @@ func TestPhoneKeyboardOnATPM(t *testing.T) {
 	moved := phonegate.NewGateService(tpm, slot, pubPath, false)
 	r, _ = release()
 	if status, _ := moved.TakeRelease(r); status != attest.ReleaseTPMRefused || moved.KeyboardSession() != nil {
-		t.Fatalf("a moved PCR opened the pad: %d", status)
+		t.Fatalf("a moved PCR opened the seed: %d", status)
 	}
 }
 
-// The vault's keyboard on a real TPM, against the vault's protocol: enrolled, the salt goes over TLS
-// once; at boot K and the pad open while the slot's policy holds; the keys are proved, and a pepper
-// comes under K, after the boot's close, when the TPM would refuse. Keys and pepper make the enrolled key.
+// The vault's keyboard on a real TPM, against the vault's protocol: at boot R and the seed open
+// while the slot's policy holds; the pepper is typed through the layout the vault showed after the
+// boot's close, when the TPM would refuse. Password, salt and pepper make the enrolled key.
 func TestVaultKeyboardOnATPM(t *testing.T) {
-	for _, withPepper := range []bool{false, true} {
-		t.Run(fmt.Sprintf("pepper=%v", withPepper), func(t *testing.T) {
-			sock := startSWTPM(t)
-			const slot = nvslot.NVRAMSlotStart + 4
-			privPath, pubPath := signingKeyFiles(t)
-			if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
-				t.Fatal(err)
-			}
-			tv := &testVault{token: "tok-k", nonces: map[string][]byte{}}
-			srv := httptest.NewTLSServer(tv)
-			defer srv.Close()
-			trustTestVault(t, srv)
+	sock := startSWTPM(t)
+	const slot = nvslot.NVRAMSlotStart + 4
+	privPath, pubPath := signingKeyFiles(t)
+	if err := Seal(sock, "23", slot, pubPath, privPath, false, measure.PCRHashAlgoSHA256, false, true); err != nil {
+		t.Fatal(err)
+	}
+	tv := &testVault{token: "tok-k", nonces: map[string][]byte{}}
+	srv := httptest.NewTLSServer(tv)
+	defer srv.Close()
+	trustTestVault(t, srv)
 
-			old := terminalAsk
-			answers := map[string]string{"Pepper": "s3cret pepper", "The same pepper": "s3cret pepper", "Password": "hunter2", "The same password": "hunter2"}
-			terminalAsk = func(prompt string) ([]byte, error) {
-				for _, k := range []string{"The same pepper", "The same password", "Pepper", "Password"} {
-					if strings.HasPrefix(prompt, k) {
-						return []byte(answers[k]), nil
-					}
-				}
-				return nil, fmt.Errorf("unexpected prompt %q", prompt)
+	pepper := "correct9horse"
+	oldAsk := terminalAsk
+	answers := map[string]string{"Pepper": pepper, "The same pepper": pepper, "Password": "hunter2", "The same password": "hunter2"}
+	answer := func(prompt string) ([]byte, error) {
+		for _, k := range []string{"The same pepper", "The same password", "Pepper", "Password"} {
+			if strings.HasPrefix(prompt, k) {
+				return []byte(answers[k]), nil
 			}
-			defer func() { terminalAsk = old }()
-			key, _, err := vaultEnrolKey(VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL, TypedPassword: true, Keyboard: true,
-				Pin: vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo), Token: "tok-k", PrivKeyPath: privPath, Pepper: withPepper})
-			if err != nil {
-				t.Fatalf("enrol: %v", err)
-			}
-			if len(tv.enrol.KeyboardSalt) != attest.KeyboardDefaultLength || attest.CheckKeyboardSalt(tv.enrol.KeyboardSalt) != nil {
-				t.Fatalf("the salt sent: %d characters", len(tv.enrol.KeyboardSalt))
-			}
-			tpmDev, err := transport.OpenTPM(sock)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tpmDev.Close()
-			vs := vaultkey.Slots(tpmDev, false)[0]
-			want := diskkey.RecipeVaultKeyboard
-			if withPepper {
-				want = diskkey.RecipeVaultKeyboardPepper
-			}
-			if v := vs.Att.Vault; !v.Keyboard || v.Unattended() || v.Pepper != withPepper || vaultRecipeOf(&v) != want {
-				t.Fatalf("the vault method %+v", v)
-			}
+		}
+		return nil, fmt.Errorf("unexpected prompt %q", prompt)
+	}
+	terminalAsk = answer
+	defer func() { terminalAsk = oldAsk }()
+	key, _, err := vaultEnrolKey(VaultEnrolOptions{TPMPath: sock, SealIndex: slot, URL: srv.URL, TypedPassword: true, Keyboard: true,
+		Pin: vaultproto.PinOf(srv.Certificate().RawSubjectPublicKeyInfo), Token: "tok-k", PrivKeyPath: privPath})
+	if err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	if !tv.enrol.Keyboard || len(tv.enrol.Remote.Credential) == 0 {
+		t.Fatalf("the enrolment sent: keyboard %v", tv.enrol.Keyboard)
+	}
+	if body, _ := json.Marshal(tv.enrol); strings.Contains(string(body), pepper) {
+		t.Fatal("the pepper went to the vault")
+	}
+	tpmDev, err := transport.OpenTPM(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tpmDev.Close()
+	vs := vaultkey.Slots(tpmDev, false)[0]
+	if v := vs.Att.Vault; !v.Keyboard || v.Unattended() || v.Pepper || vaultRecipeOf(&v) != diskkey.RecipeVaultKeyboard {
+		t.Fatalf("the vault method %+v", v)
+	}
 
-			tv.peppers, tv.gave = [][]byte{[]byte("s3cret pepper")}, 0
-			sess, err := vaultkey.OpenKeyboard(context.Background(), tpmDev, vs, func(string) {})
-			if err != nil {
-				t.Fatalf("at boot: %v", err)
-			}
-			// The boot closes; from here on the TPM opens nothing of the slot's.
-			if err := extendPCR(tpmDev, 15, "close"); err != nil {
-				t.Fatal(err)
-			}
-			if !sess.NeedKeys() {
-				t.Fatal("the keys are not asked for")
-			}
-			if _, err := sess.Salt([]byte("short")); !errors.Is(err, diskkey.ErrWrongKeys) {
-				t.Fatalf("not keys: %v", err)
-			}
-			wrong := bytes.Clone(tv.keys)
-			wrong[0] = attest.KeyboardAlphabet[(strings.IndexByte(attest.KeyboardAlphabet, wrong[0])+1)%len(attest.KeyboardAlphabet)]
-			if _, err := sess.Salt(wrong); !errors.Is(err, diskkey.ErrWrongKeys) {
-				t.Fatalf("wrong keys: %v", err)
-			}
-			salt, err := sess.Salt(tv.keys)
-			if err != nil {
-				t.Fatalf("the right keys: %v", err)
-			}
-			if sess.NeedKeys() {
-				t.Fatal("the keys are asked for again")
-			}
-			if got, _ := diskkey.Combine([]byte("hunter2"), salt); !bytes.Equal(got, key) {
-				t.Fatal("password, keys and pepper do not make the enrolled key")
-			}
-		})
+	salt, sess, err := vaultkey.OpenKeyboard(context.Background(), tpmDev, vs, func(string) {})
+	if err != nil {
+		t.Fatalf("at boot: %v", err)
+	}
+	// The boot closes; from here on the TPM opens nothing of the slot's.
+	if err := extendPCR(tpmDev, 15, "close"); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := tv.layout.Keys([]byte(pepper))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sess.Pepper(keys)
+	if err != nil || string(got) != pepper {
+		t.Fatalf("the keys of the vault's layout make %s: %v", got, err)
+	}
+	if _, err := sess.Pepper([]byte("short")); !errors.Is(err, diskkey.ErrNotAPepper) {
+		t.Fatalf("not a pepper: %v", err)
+	}
+	if k, _ := diskkey.Combine([]byte("hunter2"), diskkey.KeyboardSalt(salt, got)); !bytes.Equal(k, key) {
+		t.Fatal("password, salt and pepper do not make the enrolled key")
+	}
+	if k, _ := diskkey.Combine([]byte("hunter2"), salt); bytes.Equal(k, key) {
+		t.Fatal("the key opens without the pepper")
 	}
 }

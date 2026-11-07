@@ -397,11 +397,9 @@ Signatures never cover this encoding; they cover the canonical strings of §9.
 | 15 | factor_credential | bytes ≤1024 | O | a wrapped factor the phone is asked to keep (`factor enrol` on the booted system; never at boot): `TPM2_MakeCredential` credentialBlob for the machine's EK and release key. Kept, replacing any kept one, when the verdict is accepted (not on reject); returned in a Release after the accepted receipt of this and every later session |
 | 16 | factor_secret | bytes ≤1024 | O | with 15: `TPM2_MakeCredential` secret |
 | 17 | factor_label | string ≤64 | O | with 15: the factor's label, default `luks` |
-| 18 | keyboard_salt | bytes ≤32 | O | a salt typed through a one-time keyboard, to keep (`phone salt enrol --keyboard`; never at boot); the verifier can read it |
-| 19 | keyboard_release_key | bytes | O | with 18: the slot's release key, checked against the signing key pinned at enrolment |
-| 20 | keyboard_signing_key | bytes | O | with 18: the signing key's public area |
-| 21 | keyboard_policy_ref | bytes ≤64 | O | with 18 |
-| 22 | keyboard_label | string ≤64 | O | with 18: the salt's label, default `luks` |
+| 18 | keyboard_release_key | bytes | O | with 15: the slot's keyslot takes a pepper typed through the phone's one-time keyboard (`phone salt enrol --keyboard-pepper`; never at boot): the slot's release key, checked against the signing key pinned at enrolment; the record keeps its Name |
+| 19 | keyboard_signing_key | bytes | O | with 18: the signing key's public area |
+| 20 | keyboard_policy_ref | bytes ≤64 | O | with 18 |
 
 BootContext (nested): 1 `blob_version` u32 · 2 `nvram_index` u32 ·
 3 `measure_point` string ≤512 · 4 `pcr7_chain` bytes ≤16384 O ·
@@ -416,10 +414,12 @@ not on the wire. The same field is in the EnrolOffer's `boot_context`. A running
 PCR 7 is past systemd's `os-separator`, which is in no firmware's log: the digests replay to
 the quoted value, or to it after exactly that one constant.
 
-A Release of kind 3 (`ReleaseKindKeyboard`) after a trusted receipt, for a record that keeps such a
-salt, carries a credential of 32 bytes for the machine's EK and the release key: the secret this boot's
-pad is derived from (`attest.KeyboardPadFrom`). The event `keyboard_keys` gives the app the keys to show,
-once the machine says the TPM opened it, and not in the session that handed the salt over.
+For a record with a keyboard, the Release of the factor (kind 2) carries fields 8 `keyboard_credential`
+and 9 `keyboard_secret` (both or neither, ≤1024 each): a seed of 32 bytes drawn for this boot,
+`TPM2_MakeCredential` for the machine's EK and the release key, of which the layout of the 36 keys
+is made (`attest.KeyboardLayoutOf`). The event `keyboard_layout` (`keyboard_keys`: the keys in order,
+`layout`: what each one types) gives the app the layout to show, once the machine says the TPM opened
+it, and not in the session that handed the salt over. The phone keeps neither seed nor layout.
 
 The verdict and the enrolment event carry `sha1_bank` when the selection is on the SHA-1
 bank: a warning beside the state, that decides nothing.
@@ -467,6 +467,8 @@ phone, decides whether a released factor opens.
 | 5 | ciphertext | bytes ≤4096 | O | kind 1 only |
 | 6 | approval | bytes ≤600 | O | unused: the release key has no branch the phone could open (PLAN-PHONESALT.md §4.1) |
 | 7 | label | string ≤64 | O | factor label, default `luks` |
+| 8 | keyboard_credential | bytes ≤1024 | O | kind 2, a record with a keyboard: this boot's seed, `TPM2_MakeCredential` credentialBlob for the EK and the release key (§7.3, the evidence's 18) |
+| 9 | keyboard_secret | bytes ≤1024 | O | with 8: its secret; one without the other is malformed |
 
 The phone never holds the factor itself — only this blob, which only the
 enrolled machine's TPM can open. The machine derives the salt as in §9.7.

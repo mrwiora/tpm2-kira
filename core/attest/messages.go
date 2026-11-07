@@ -241,8 +241,8 @@ type Evidence struct {
 	// record once the person has accepted the verdict, and returns it in
 	// a Release after every trusted receipt from then on.
 	FactorKeep *FactorBlob
-	// KeyboardKeep asks the verifier to keep a salt typed through the keyboard, on the booted
-	// system as FactorKeep is (keyboard.go).
+	// KeyboardKeep, beside a FactorKeep, says the keyslot takes a pepper typed through the
+	// phone's one-time keyboard (keyboard.go).
 	KeyboardKeep *KeyboardKeep
 }
 
@@ -282,13 +282,9 @@ func (m *Evidence) Encode() ([]byte, error) {
 		}
 	}
 	if k := m.KeyboardKeep; k != nil {
-		e.Bytes(18, k.Salt)
-		e.Bytes(19, k.ReleaseKeyPublic)
-		e.Bytes(20, k.SigningPublic)
-		e.Bytes(21, k.PolicyRef)
-		if k.Label != "" {
-			e.String(22, k.Label)
-		}
+		e.Bytes(18, k.ReleaseKeyPublic)
+		e.Bytes(19, k.SigningPublic)
+		e.Bytes(20, k.PolicyRef)
 	}
 	return e.Finish()
 }
@@ -320,13 +316,11 @@ func DecodeEvidence(d *Decoder) (*Evidence, error) {
 			Label:           d.String(17, maxShortString, false),
 		}
 	}
-	if salt := d.Bytes(18, KeyboardMaxLength, false); salt != nil {
+	if rk := d.Bytes(18, maxTPMPublic, false); rk != nil {
 		m.KeyboardKeep = &KeyboardKeep{
-			Salt:             salt,
-			ReleaseKeyPublic: d.Bytes(19, maxTPMPublic, true),
-			SigningPublic:    d.Bytes(20, maxTPMPublic, true),
-			PolicyRef:        d.Bytes(21, 64, true),
-			Label:            d.String(22, maxShortString, false),
+			ReleaseKeyPublic: rk,
+			SigningPublic:    d.Bytes(19, maxTPMPublic, true),
+			PolicyRef:        d.Bytes(20, 64, true),
 		}
 	}
 	vals := d.Bytes(7, 2+maxPCRValues*(5+65), true)
@@ -456,7 +450,6 @@ func DecodeReceipt(d *Decoder) (*Receipt, error) {
 const (
 	ReleaseKindPassphrase uint8 = 1
 	ReleaseKindFactor     uint8 = 2
-	ReleaseKindKeyboard   uint8 = 3 // the pad for a salt typed through the keyboard (keyboard.go)
 )
 
 // Release hands the attester a TPM-bound secret after a trusted receipt
@@ -469,6 +462,10 @@ type Release struct {
 	Ciphertext      []byte // kind 1 only
 	Approval        []byte // optional: signature for the release key's PolicySigned branch
 	Label           string // optional: factor label, default "luks"
+	// Keyboard: kind 2, for a keyslot with a pepper typed through the keyboard (keyboard.go): this
+	// boot's seed, TPM2_MakeCredential for the EK and the slot's release key.
+	KeyboardCredential []byte
+	KeyboardSecret     []byte
 }
 
 // Encode serialises the message.
@@ -483,6 +480,8 @@ func (m *Release) Encode() ([]byte, error) {
 	if m.Label != "" {
 		e.String(7, m.Label)
 	}
+	e.OptBytes(8, m.KeyboardCredential)
+	e.OptBytes(9, m.KeyboardSecret)
 	return e.Finish()
 }
 
@@ -499,6 +498,12 @@ func DecodeRelease(d *Decoder) (*Release, error) {
 		Ciphertext:      d.Bytes(5, 4096, false),
 		Approval:        d.Bytes(6, maxTPMSig, false),
 		Label:           d.String(7, maxShortString, false),
+
+		KeyboardCredential: d.Bytes(8, maxCredential, false),
+		KeyboardSecret:     d.Bytes(9, maxCredential, false),
+	}
+	if (m.KeyboardCredential == nil) != (m.KeyboardSecret == nil) {
+		return nil, fmt.Errorf("attest: a keyboard's seed has a credential and a secret, or neither")
 	}
 	return m, d.Err()
 }

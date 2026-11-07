@@ -491,7 +491,7 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if label == "" {
 			label = "luks"
 		}
-	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper, diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper, diskkey.RecipeVaultKeyboard, diskkey.RecipeVaultKeyboardPepper:
+	case diskkey.RecipeUnattendedVault, diskkey.RecipeUnattendedVaultPepper, diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper, diskkey.RecipeVaultKeyboard:
 		o.Vault.Keyboard = o.Recipe.Keyboard()
 		o.Vault.Pepper = o.Recipe.Pepper()
 		o.Vault.TypedPassword = !o.Recipe.Unattended()
@@ -551,9 +551,9 @@ func LuksEnrol(o LuksEnrolOptions) error {
 		if o.Recipe.FromVault() {
 			from = "the vault"
 		}
-		fmt.Printf("Every boot %s shows the keys to press at the machine, different every time, and\n", from)
-		fmt.Println("the password is asked with them. Without it, the recovery recipe and the recovery")
-		fmt.Println("passphrase stay the way in.")
+		fmt.Printf("Every boot %s shows a one-time keyboard layout, different every time; the password\n", from)
+		fmt.Println("is asked, then the pepper, typed through that layout. Without it, the recovery recipe")
+		fmt.Println("and the recovery passphrase stay the way in.")
 		return nil
 	}
 	if o.Recipe.FromVault() && o.Recipe.Pepper() {

@@ -14,106 +14,86 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// A salt typed through a one-time keyboard. The phone or the vault holds a short salt and acts
-// only on a good attestation, but it does not hand the salt over: it draws a pad for this boot
-// alone, gives the machine the pad and the person the keys to press. The machine applies the pad
-// to what is typed and has the salt, so a recording of the keys is worth nothing: the next boot's
-// keys differ.
+// A pepper typed through a one-time keyboard. The pepper is the person's alone: no device stores
+// it. After a good attestation the phone or the vault draws a seed for this boot alone, wraps it
+// for the TPM and shows the person a layout made from it: on every key of the keyboard another
+// character. The person types the pepper by pressing, for each of its characters, the key that
+// shows it; the machine opens the seed in its TPM, makes the same layout and maps the keys back.
+// A recording of the keys is worth nothing without the layout, and the next boot's differs.
 //
-// The mapping is one per position, the key at position i being salt[i] + pad[i] in the alphabet,
-// and not one table for the whole salt: a table would show which of the salt's characters repeat,
-// the same way in every recording, and could map a key to itself. So the keys are uniformly random
-// and say nothing without the pad, which is wrapped for the TPM besides (docs/DISK-KEY.md).
+// One layout holds for the whole boot: a recording shows the pepper's length and which of its
+// characters repeat, not which they are (docs/DISK-KEY.md).
 
-// KeyboardAlphabet is what a salt and the keys are made of: no y and z, which layouts swap, and
-// nothing that looks like something else (l, o, 0, 1).
-const KeyboardAlphabet = "abcdefghijkmnpqrstuvwx23456789"
+// KeyboardKeys are the keys a layout covers, in its order: the US keyboard's letters and digits,
+// without Shift. Capitals are taken for their keys.
+const KeyboardKeys = "abcdefghijklmnopqrstuvwxyz0123456789"
 
-// A salt's length: 8 by default, as many characters as the pad's credential can carry at most.
+// KeyboardUS is how the US keyboard arranges KeyboardKeys, row by row, for a phone's screen. Other
+// arrangements are added beside it; the layout itself does not change with them.
+var KeyboardUS = []string{"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"}
+
+// A pepper's length.
 const (
-	KeyboardDefaultLength = 8
-	KeyboardMinLength     = 8
-	KeyboardMaxLength     = 32
+	KeyboardPepperMin = 8
+	KeyboardPepperMax = 64
 )
 
-// ErrKeyboardKeys says what was typed cannot be the keys: the wrong length or a character outside
-// the alphabet.
-var ErrKeyboardKeys = errors.New("those are not the keys shown")
+// KeyboardSeedSize is what is wrapped for the TPM: a credential holds what a factor does.
+const KeyboardSeedSize = 32
 
-func keyboardIndex(c byte) int {
-	if c >= 'A' && c <= 'Z' {
-		c += 'a' - 'A'
-	}
-	for i := 0; i < len(KeyboardAlphabet); i++ {
-		if KeyboardAlphabet[i] == c {
-			return i
-		}
+// ErrKeyboardPepper says what was typed cannot be a pepper: the wrong length or a key outside the
+// layout.
+var ErrKeyboardPepper = errors.New("not a pepper: 8 to 64 keys, letters and digits alone")
+
+// keyIndex is the place of a key in KeyboardKeys, or -1.
+func keyIndex(c byte) int {
+	switch {
+	case c >= 'a' && c <= 'z':
+		return int(c - 'a')
+	case c >= 'A' && c <= 'Z':
+		return int(c - 'A')
+	case c >= '0' && c <= '9':
+		return 26 + int(c-'0')
 	}
 	return -1
 }
 
-// keyboardDraw is n values below len(KeyboardAlphabet), uniformly.
-func keyboardDraw(rng io.Reader, n int) ([]byte, error) {
-	if rng == nil {
-		rng = rand.Reader
+// CheckKeyboardPepper says why p is no pepper for the keyboard, or nil: as it is set, lower case.
+func CheckKeyboardPepper(p []byte) error {
+	if len(p) < KeyboardPepperMin || len(p) > KeyboardPepperMax {
+		return ErrKeyboardPepper
 	}
-	size := byte(len(KeyboardAlphabet))
-	limit := 256 - 256%int(size)
-	out := make([]byte, 0, n)
-	var b [1]byte
-	for len(out) < n {
-		if _, err := io.ReadFull(rng, b[:]); err != nil {
-			return nil, err
-		}
-		if int(b[0]) < limit {
-			out = append(out, b[0]%size)
-		}
-	}
-	return out, nil
-}
-
-// NewKeyboardSalt draws a salt of n characters. The caller wipes it.
-func NewKeyboardSalt(rng io.Reader, n int) ([]byte, error) {
-	if n < KeyboardMinLength || n > KeyboardMaxLength {
-		return nil, fmt.Errorf("a salt typed through the keyboard has %d to %d characters, not %d", KeyboardMinLength, KeyboardMaxLength, n)
-	}
-	v, err := keyboardDraw(rng, n)
-	if err != nil {
-		return nil, err
-	}
-	for i := range v {
-		v[i] = KeyboardAlphabet[v[i]]
-	}
-	return v, nil
-}
-
-// CheckKeyboardSalt says why s is no such salt, or nil.
-func CheckKeyboardSalt(s []byte) error {
-	if len(s) < KeyboardMinLength || len(s) > KeyboardMaxLength {
-		return fmt.Errorf("a salt typed through the keyboard has %d to %d characters, not %d", KeyboardMinLength, KeyboardMaxLength, len(s))
-	}
-	for _, c := range s {
-		if c >= 'A' && c <= 'Z' || keyboardIndex(c) < 0 {
-			return errors.New("a salt typed through the keyboard holds a character outside its alphabet")
+	for _, c := range p {
+		if c >= 'A' && c <= 'Z' || keyIndex(c) < 0 {
+			return ErrKeyboardPepper
 		}
 	}
 	return nil
 }
 
-// KeyboardSecretSize is what the phone wraps for the TPM: a credential holds what a factor does.
-const KeyboardSecretSize = 32
+// NewKeyboardSeed draws a boot's seed. The caller wipes it.
+func NewKeyboardSeed(rng io.Reader) ([]byte, error) {
+	if rng == nil {
+		rng = rand.Reader
+	}
+	s := make([]byte, KeyboardSeedSize)
+	if _, err := io.ReadFull(rng, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
 
-// keyboardStream is HMAC-SHA256(secret, label ‖ counter), read as a stream.
+// keyboardStream is HMAC-SHA256(seed, label ‖ counter), read as a stream.
 type keyboardStream struct {
-	secret []byte
-	ctr    uint32
-	buf    []byte
+	seed []byte
+	ctr  uint32
+	buf  []byte
 }
 
 func (k *keyboardStream) Read(p []byte) (int, error) {
 	for len(k.buf) == 0 {
-		m := hmac.New(sha256.New, k.secret)
-		m.Write([]byte("tpm2-kira/keyboard-pad/v1"))
+		m := hmac.New(sha256.New, k.seed)
+		m.Write([]byte("tpm2-kira/keyboard-layout/v1"))
 		m.Write(binary.BigEndian.AppendUint32(nil, k.ctr))
 		k.ctr++
 		k.buf = m.Sum(nil)
@@ -123,104 +103,111 @@ func (k *keyboardStream) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// KeyboardPadFrom is the pad a secret of KeyboardSecretSize stands for, for n characters: the phone's
-// way, since what the TPM opens has a fixed size, whatever the salt's.
-func KeyboardPadFrom(secret []byte, n int) ([]byte, error) {
-	if len(secret) != KeyboardSecretSize {
-		return nil, fmt.Errorf("a keyboard's secret has %d bytes, not %d", KeyboardSecretSize, len(secret))
-	}
-	return keyboardDraw(&keyboardStream{secret: secret}, n)
-}
-
-// NewKeyboardPad draws a pad for one boot and a salt of n characters.
-func NewKeyboardPad(rng io.Reader, n int) ([]byte, error) {
-	return keyboardDraw(rng, n)
-}
-
-func checkKeyboardPad(pad []byte, n int) error {
-	if len(pad) != n {
-		return ErrKeyboardKeys
-	}
-	for _, p := range pad {
-		if int(p) >= len(KeyboardAlphabet) {
-			return errors.New("the keyboard's pad is malformed")
+// below is a value below n, uniformly, from the stream.
+func (k *keyboardStream) below(n int) int {
+	limit := 256 - 256%n
+	var b [1]byte
+	for {
+		k.Read(b[:])
+		if int(b[0]) < limit {
+			return int(b[0]) % n
 		}
 	}
-	return nil
 }
 
-// KeyboardKeys is the keys to press: the salt through the pad.
-func KeyboardKeys(salt, pad []byte) ([]byte, error) {
-	if err := CheckKeyboardSalt(salt); err != nil {
-		return nil, err
-	}
-	if err := checkKeyboardPad(pad, len(salt)); err != nil {
-		return nil, err
-	}
-	size := len(KeyboardAlphabet)
-	out := make([]byte, len(salt))
-	for i := range salt {
-		out[i] = KeyboardAlphabet[(keyboardIndex(salt[i])+int(pad[i]))%size]
-	}
-	return out, nil
+// KeyboardLayout is a boot's layout: Shows[i] is the character the key KeyboardKeys[i] stands for.
+type KeyboardLayout struct {
+	Shows [len(KeyboardKeys)]byte
 }
 
-// KeyboardSaltOf is the salt behind what was typed: the keys through the pad. Capitals are taken
-// for the letters they are; anything else outside the alphabet, or another length, is
-// ErrKeyboardKeys. Wrong keys of the right form give a wrong salt: only the keyslot, or the vault's
-// proof, can tell. The caller wipes the result.
-func KeyboardSaltOf(keys, pad []byte) ([]byte, error) {
-	if err := checkKeyboardPad(pad, len(keys)); err != nil {
-		return nil, err
+// KeyboardLayoutOf is the layout a seed stands for: a permutation of KeyboardKeys, Fisher-Yates
+// from the seed's stream, so the phone or the vault and the machine make the same.
+func KeyboardLayoutOf(seed []byte) (*KeyboardLayout, error) {
+	if len(seed) != KeyboardSeedSize {
+		return nil, fmt.Errorf("a keyboard's seed has %d bytes, not %d", KeyboardSeedSize, len(seed))
 	}
-	size := len(KeyboardAlphabet)
-	out := make([]byte, len(keys))
-	for i := range keys {
-		k := keyboardIndex(keys[i])
+	l := &KeyboardLayout{}
+	copy(l.Shows[:], KeyboardKeys)
+	s := &keyboardStream{seed: seed}
+	for i := len(l.Shows) - 1; i > 0; i-- {
+		j := s.below(i + 1)
+		l.Shows[i], l.Shows[j] = l.Shows[j], l.Shows[i]
+	}
+	clear(s.buf)
+	return l, nil
+}
+
+// String is the characters shown, in the order of KeyboardKeys: what an event carries.
+func (l *KeyboardLayout) String() string { return string(l.Shows[:]) }
+
+// Pepper is the pepper behind the keys typed. Anything but 8 to 64 letters and digits is
+// ErrKeyboardPepper; a wrong pepper of the right form is one only the keyslot can tell. The caller
+// wipes the result.
+func (l *KeyboardLayout) Pepper(typed []byte) ([]byte, error) {
+	if len(typed) < KeyboardPepperMin || len(typed) > KeyboardPepperMax {
+		return nil, ErrKeyboardPepper
+	}
+	out := make([]byte, len(typed))
+	for i, c := range typed {
+		k := keyIndex(c)
 		if k < 0 {
 			clear(out)
-			return nil, ErrKeyboardKeys
+			return nil, ErrKeyboardPepper
 		}
-		out[i] = KeyboardAlphabet[(k+size-int(pad[i]))%size]
+		out[i] = l.Shows[k]
 	}
 	return out, nil
 }
 
-// KeyboardKeep asks the phone to keep a salt typed through the keyboard, in the evidence of a
-// session on the booted system. It travels in the Noise session alone. The release key is what the
-// pad is wrapped for at every boot; the phone checks it against the signing key it pinned.
+// Keys are the keys to press for a pepper: the inverse of Pepper, for tests and the vault's view.
+func (l *KeyboardLayout) Keys(pepper []byte) ([]byte, error) {
+	if err := CheckKeyboardPepper(pepper); err != nil {
+		return nil, err
+	}
+	out := make([]byte, len(pepper))
+	for i, c := range pepper {
+		out[i] = KeyboardKeys[bytes.IndexByte(l.Shows[:], c)]
+	}
+	return out, nil
+}
+
+// Wipe clears the layout.
+func (l *KeyboardLayout) Wipe() {
+	if l != nil {
+		clear(l.Shows[:])
+	}
+}
+
+// KeyboardKeep tells the phone, in the evidence of the session that hands a phone salt over, that
+// the slot's keyslot takes a pepper typed through its keyboard: the release key the seed is wrapped
+// for at every boot, which the phone checks against the signing key it pinned. It travels with the
+// FactorKeep, in the Noise session alone.
 type KeyboardKeep struct {
-	Salt             []byte
 	ReleaseKeyPublic []byte
 	SigningPublic    []byte
 	PolicyRef        []byte
-	Label            string
 }
 
-// KeyboardRecord is a kept salt in the phone's record, encrypted at rest with the record.
+// KeyboardRecord in the phone's record says the phone shows a layout with every release of the
+// phone salt, and for which release key.
 type KeyboardRecord struct {
-	Salt           []byte    `json:"salt"`
 	ReleaseKeyName HexStr    `json:"release_key_name"`
-	Label          string    `json:"label,omitempty"`
 	KeptAt         time.Time `json:"kept_at"`
 }
 
-// KeyboardBackend is an optional AttesterBackend extension: a salt for the phone to keep.
+// KeyboardBackend is an optional AttesterBackend extension: a keyboard for the phone to keep.
 type KeyboardBackend interface {
 	KeyboardToKeep() *KeyboardKeep
 }
 
-// HasKeyboard reports whether the record keeps a salt typed through the keyboard.
+// HasKeyboard reports whether the record shows a layout with its phone salt.
 func (r *MachineRecord) HasKeyboard() bool {
-	return r != nil && r.Keyboard != nil && len(r.Keyboard.Salt) > 0
+	return r != nil && r.Keyboard != nil && len(r.Keyboard.ReleaseKeyName) > 0
 }
 
-// checkKeyboardKeep says whether what the evidence asks to keep is such a salt, for the slot's own
-// release key under the signing key pinned at enrolment; it gives that key's Name.
+// checkKeyboardKeep says whether the release key is the slot's own, under the signing key pinned at
+// enrolment; it gives that key's Name.
 func checkKeyboardKeep(k *KeyboardKeep, signingKeyName []byte) ([]byte, error) {
-	if err := CheckKeyboardSalt(k.Salt); err != nil {
-		return nil, err
-	}
 	name, err := ReleaseKeyName(k.ReleaseKeyPublic, k.SigningPublic, k.PolicyRef)
 	if err != nil {
 		return nil, err

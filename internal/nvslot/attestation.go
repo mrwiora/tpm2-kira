@@ -114,7 +114,8 @@ type VaultAttestation struct {
 	Local WrappedFactor
 	// Pepper: the salt is made with an operator's pepper too.
 	Pepper bool
-	// Keyboard: the vault holds a salt typed through its one-time keyboard, and no remote part.
+	// Keyboard: the keyslot takes a pepper typed through the vault's one-time keyboard; every release
+	// carries a seed for this boot's layout.
 	Keyboard bool
 	// PepperCheck is set for an unattended recipe with a pepper
 	// (vaultkey.PepperCheck of the key): it tells a mistyped pepper from

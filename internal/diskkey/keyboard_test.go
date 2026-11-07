@@ -7,27 +7,22 @@ import (
 	"testing"
 )
 
-// fakeKeyboard takes one set of keys.
+// fakeKeyboard maps what is typed to upper case: a layout of its own, as good as any for the prompt.
 type fakeKeyboard struct {
-	right   string
-	salt    []byte
-	proven  bool
 	calls   int
 	failure error
 }
 
-func (k *fakeKeyboard) NeedKeys() bool { return !k.proven }
-func (k *fakeKeyboard) From() string   { return "the vault" }
-func (k *fakeKeyboard) Salt(keys []byte) ([]byte, error) {
+func (k *fakeKeyboard) From() string { return "your phone" }
+func (k *fakeKeyboard) Pepper(typed []byte) ([]byte, error) {
 	k.calls++
 	if k.failure != nil {
 		return nil, k.failure
 	}
-	if !k.proven && string(keys) != k.right {
-		return nil, ErrWrongKeys
+	if len(typed) < 8 {
+		return nil, ErrNotAPepper
 	}
-	k.proven = true
-	return append([]byte(nil), k.salt...), nil
+	return bytes.ToUpper(typed), nil
 }
 
 func keyboardAsk(answers map[string][]string) (Prompter, *[]string, *[]string) {
@@ -44,86 +39,80 @@ func keyboardAsk(answers map[string][]string) (Prompter, *[]string, *[]string) {
 	}, &asked, &notes
 }
 
-// The password, then the keys; the key is the password's and the salt's. What the person is told
-// says to press what is shown, not the salt.
+func deviceSalt(s string) func(string, Recipe) []byte {
+	return func(string, Recipe) []byte { return []byte(s) }
+}
+
+// The password, then the pepper through the layout; the key is the password's and the device's
+// salt with the pepper the layout made of the keys.
 func TestKeyboardPrompt(t *testing.T) {
 	cheapCombine(t)
-	sess := &fakeKeyboard{right: "keysabcd", salt: []byte("the salt")}
-	ask, asked, notes := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Keys": {"keysabcd"}})
-	key, err := DiskKey(nil, func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipeVaultKeyboard), ask)("cryptroot")
+	sess := &fakeKeyboard{}
+	ask, asked, notes := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Pepper": {"keysabcd"}})
+	key, err := DiskKey(deviceSalt("the salt"), func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipePhoneKeyboard), ask)("cryptroot")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := derive([]byte("hunter2"), []byte("the salt"))
+	want, _ := derive([]byte("hunter2"), KeyboardSalt([]byte("the salt"), []byte("KEYSABCD")))
 	if !bytes.Equal(key, want) {
-		t.Fatal("the key is not the password's and the salt's")
+		t.Fatal("the key is not the password's with the salt and the mapped pepper")
 	}
-	if strings.Join(*asked, ",") != "Password,Keys" {
+	if strings.Join(*asked, ",") != "Password,Pepper" {
 		t.Fatalf("asked %v", *asked)
 	}
-	if !strings.Contains((*notes)[0], "press the keys the vault shows") {
+	if !strings.Contains((*notes)[0], "layout your phone shows") {
 		t.Fatalf("the note: %q", (*notes)[0])
 	}
+	// The pepper matters: another one, another salt.
+	if bytes.Equal(KeyboardSalt([]byte("the salt"), []byte("a")), KeyboardSalt([]byte("the salt"), []byte("b"))) {
+		t.Fatal("the pepper changes nothing")
+	}
 }
 
-// Wrong keys are asked for again, a few times; then the way goes on to cryptsetup's own prompt.
-func TestKeyboardWrongKeys(t *testing.T) {
+// A pepper of the wrong form is asked for again, a few times; then cryptsetup's own prompt.
+func TestKeyboardNotAPepper(t *testing.T) {
 	cheapCombine(t)
-	sess := &fakeKeyboard{right: "keysabcd", salt: []byte("the salt")}
-	ask, asked, notes := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Keys": {"wrong", "keysabcd"}})
-	if _, err := DiskKey(nil, func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipePhoneKeyboard), ask)("cryptroot"); err != nil {
+	sess := &fakeKeyboard{}
+	ask, asked, notes := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Pepper": {"short", "keysabcd"}})
+	if _, err := DiskKey(deviceSalt("s"), func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipeVaultKeyboard), ask)("cryptroot"); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(*asked, ",") != "Password,Keys,Keys" || !strings.Contains((*notes)[2], "not the keys shown") {
+	if strings.Join(*asked, ",") != "Password,Pepper,Pepper" || !strings.Contains((*notes)[2], "not a pepper") {
 		t.Fatalf("asked %v, notes %q", *asked, *notes)
 	}
 
-	sess = &fakeKeyboard{right: "keysabcd", salt: []byte("the salt")}
-	ask, asked, _ = keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Keys": {"a", "b", "c", "keysabcd"}})
-	_, err := DiskKey(nil, func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipePhoneKeyboard), ask)("cryptroot")
-	if !errors.Is(err, ErrUnlockSkipped) {
-		t.Fatalf("after three wrong: %v", err)
-	}
-	if len(*asked) != 4 {
-		t.Fatalf("asked %v", *asked)
+	ask, asked, _ = keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Pepper": {"a", "b", "c", "keysabcd"}})
+	_, err := DiskKey(deviceSalt("s"), func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipePhoneKeyboard), ask)("cryptroot")
+	if !errors.Is(err, ErrUnlockSkipped) || len(*asked) != 4 {
+		t.Fatalf("after three: %v, asked %v", err, *asked)
 	}
 }
 
-// Once the vault took the keys they are not asked for again: a key that opened nothing, a mistyped
-// password say, is asked for from the password on.
-func TestKeyboardKeysOnce(t *testing.T) {
-	cheapCombine(t)
-	sess := &fakeKeyboard{right: "keysabcd", salt: []byte("the salt")}
-	ask, asked, _ := keyboardAsk(map[string][]string{"Password": {"typo", "hunter2"}, "Keys": {"keysabcd"}})
-	get := DiskKey(nil, func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipeVaultKeyboard), ask)
-	if _, err := get("cryptroot"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := get("cryptroot"); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(*asked, ",") != "Password,Keys,Password" {
-		t.Fatalf("asked %v", *asked)
-	}
-}
-
-// Nothing from the device: the recovery recipe, with what is typed there, as for every device-held
-// salt; a refusal after the keys leads to cryptsetup's own prompt.
+// Nothing from the device - no layout or no salt: the recovery recipe, with what is typed there, as
+// for every device-held salt; a failing layout leads to cryptsetup's own prompt.
 func TestKeyboardFallbacks(t *testing.T) {
 	cheapCombine(t)
-	ask, asked, notes := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Salt": {"typed salt"}})
-	key, err := DiskKey(nil, func(string, Recipe) KeyboardSession { return nil }, nil, recipeOf(RecipeVaultKeyboard), ask)("cryptroot")
-	if err != nil {
-		t.Fatal(err)
+	for name, c := range map[string]struct {
+		salt func(string, Recipe) []byte
+		kb   func(string, Recipe) KeyboardSession
+	}{
+		"no layout": {deviceSalt("s"), func(string, Recipe) KeyboardSession { return nil }},
+		"no salt":   {func(string, Recipe) []byte { return nil }, func(string, Recipe) KeyboardSession { return &fakeKeyboard{} }},
+	} {
+		ask, asked, notes := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Salt": {"typed salt"}})
+		key, err := DiskKey(c.salt, c.kb, nil, recipeOf(RecipeVaultKeyboard), ask)("cryptroot")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want, _ := derive([]byte("hunter2"), []byte("typed salt"))
+		if !bytes.Equal(key, want) || strings.Join(*asked, ",") != "Password,Salt" || !strings.Contains((*notes)[0], "no salt and keyboard from the vault") {
+			t.Fatalf("%s: asked %v, notes %q", name, *asked, *notes)
+		}
 	}
-	want, _ := derive([]byte("hunter2"), []byte("typed salt"))
-	if !bytes.Equal(key, want) || strings.Join(*asked, ",") != "Password,Salt" || !strings.Contains((*notes)[0], "no keyboard from the vault") {
-		t.Fatalf("asked %v, notes %q", *asked, *notes)
-	}
-	ask, _, _ = keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Keys": {"x"}})
-	sess := &fakeKeyboard{failure: errors.New("the vault refused")}
-	_, err = DiskKey(nil, func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipeVaultKeyboard), ask)("cryptroot")
-	if !errors.Is(err, ErrUnlockSkipped) || !strings.Contains(err.Error(), "the vault refused") {
+	ask, _, _ := keyboardAsk(map[string][]string{"Password": {"hunter2"}, "Pepper": {"keysabcd"}})
+	sess := &fakeKeyboard{failure: errors.New("the layout is gone")}
+	_, err := DiskKey(deviceSalt("s"), func(string, Recipe) KeyboardSession { return sess }, nil, recipeOf(RecipeVaultKeyboard), ask)("cryptroot")
+	if !errors.Is(err, ErrUnlockSkipped) || !strings.Contains(err.Error(), "the layout is gone") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -131,41 +120,40 @@ func TestKeyboardFallbacks(t *testing.T) {
 // The recipes: flags and their limits, as the words and numbers say them.
 func TestKeyboardRecipes(t *testing.T) {
 	for _, c := range []struct {
-		password, salt string
-		pepper         bool
-		want           Recipe
-	}{
-		{"typed", "phone", false, RecipePhoneKeyboard},
-		{"typed", "vault", false, RecipeVaultKeyboard},
-		{"typed", "vault", true, RecipeVaultKeyboardPepper},
-	} {
-		r, err := RecipeOf(c.password, c.salt, c.pepper, true)
+		salt string
+		want Recipe
+	}{{"phone", RecipePhoneKeyboard}, {"vault", RecipeVaultKeyboard}} {
+		r, err := RecipeOf("typed", c.salt, false, true)
 		if err != nil || r != c.want || !r.Keyboard() {
 			t.Errorf("%v: %v %v", c, r, err)
 		}
 		fields := strings.Fields(r.Words())
-		if fields[len(fields)-1] != "--keyboard" {
+		if fields[len(fields)-1] != "--keyboard-pepper" {
 			t.Errorf("%v: words %q", r, r.Words())
 		}
-		if !strings.Contains(r.Describe(), "one-time keyboard") {
+		if !strings.Contains(r.Describe(), "pepper typed through a one-time keyboard") {
 			t.Errorf("%v: %q", r, r.Describe())
 		}
 	}
-	for name, c := range map[string][2]string{
-		"unattended": {"tpm", "vault"},
-		"typed salt": {"typed", "typed"},
-		"the TPM's":  {"typed", "tpm"},
+	for name, c := range map[string]struct {
+		password, salt string
+		pepper         bool
+	}{
+		"unattended":           {"tpm", "vault", false},
+		"typed salt":           {"typed", "typed", false},
+		"the TPM's":            {"typed", "tpm", false},
+		"an operator's pepper": {"typed", "vault", true},
 	} {
-		if _, err := RecipeOf(c[0], c[1], false, true); err == nil {
+		if _, err := RecipeOf(c.password, c.salt, c.pepper, true); err == nil {
 			t.Errorf("%s with a keyboard is taken", name)
 		}
 	}
-	for _, s := range []string{"0x1302", "0x1402", "0x1403"} {
+	for _, s := range []string{"0x1302", "0x1402"} {
 		if r, err := ParseRecipe(s); err != nil || r.String() != s {
 			t.Errorf("%s: %v %v", s, r, err)
 		}
 	}
-	for _, s := range []string{"0x1102", "0x1202", "0x2402", "0x1303"} {
+	for _, s := range []string{"0x1102", "0x1202", "0x2402", "0x1303", "0x1403"} {
 		if _, err := ParseRecipe(s); err == nil {
 			t.Errorf("%s is taken", s)
 		}

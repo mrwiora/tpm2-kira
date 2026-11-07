@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tpm2-trust/tpm2-kira/core/attest"
 	"github.com/tpm2-trust/tpm2-kira/internal/admin"
 	"github.com/tpm2-trust/tpm2-kira/internal/bootclose"
 	"github.com/tpm2-trust/tpm2-kira/internal/diskkey"
@@ -648,7 +647,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		fs.Parse(deviceLast(args[1:]))
 		if fs.NArg() != 1 || *keyslot < 0 {
-			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --password typed|tpm --salt typed|tpm|phone|vault [--pepper]"))
+			fail(fmt.Errorf("usage: tpm2-kira luks mark <device> --keyslot N --password typed|tpm --salt typed|tpm|phone|vault [--pepper|--keyboard-pepper]"))
 		}
 		recipe, err := diskkey.RecipeOf(*password, *salt, *pepper, *keyboard)
 		if err != nil {
@@ -667,7 +666,6 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		vaultURL := fs.String("url", "", "the vault's salt: the vault, https://host:port")
 		vaultPin := fs.String("pin", "", "the vault's salt: the pin of the vault's key, sha256:… as 'tpm2-kira-vault token create' prints it")
 		vaultToken := fs.String("token", "", "the vault's salt: the one-time enrolment token")
-		keyboardLength := fs.Int("keyboard-length", attest.KeyboardDefaultLength, "With --keyboard: the salt's characters, 8 to 32")
 		vaultCA := fs.String("ca", "", "the vault's salt: a file with the vault's root certificate ('tpm2-kira-vault tls root'), added to "+vaultkey.RootsPath+" when its key is the pin")
 		name := fs.String("name", "", "the vault's salt: the machine's name at the vault (default: the host name)")
 		privKey := fs.String("privkey", "", "Signing key, needed for every hand-over (default: "+signing.DefaultPrivateKeyPath+")")
@@ -679,7 +677,7 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		debug := fs.Bool("debug", debugFlag, "Enable debug output")
 		parseSigning(fs, deviceLast(args[1:]))
 		if fs.NArg() != 1 {
-			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --password typed|tpm --salt typed|tpm|phone|vault [--pepper]"))
+			fail(fmt.Errorf("usage: tpm2-kira luks enrol <device> --password typed|tpm --salt typed|tpm|phone|vault [--pepper|--keyboard-pepper]"))
 		}
 		recipe, err := diskkey.RecipeOf(*password, *salt, *pepper, *keyboard)
 		if err != nil {
@@ -692,9 +690,9 @@ func runLuks(args []string, tpmPath string, debugFlag bool) {
 		if err := admin.LuksEnrol(admin.LuksEnrolOptions{
 			Device: fs.Arg(0), Recipe: recipe, ExistingKeyFile: *existing,
 			Remote: admin.FactorEnrolOptions{TPMPath: *tpm, SealIndex: slot, Label: *label, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
-				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug, KeyboardLength: *keyboardLength},
+				Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: true, Debug: *debug},
 			Vault: admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)), URL: *vaultURL, Pin: *vaultPin,
-				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, CA: *vaultCA, Debug: *debug, KeyboardLength: *keyboardLength},
+				Token: *vaultToken, Label: *label, Name: *name, PrivKeyPath: *privKey, CA: *vaultCA, Debug: *debug},
 		}); err != nil {
 			fail(err)
 		}
@@ -748,12 +746,11 @@ func runVault(args []string, tpmPath string, debugFlag bool) {
 		out := fs.String("out", "", "Where the derived key is written, on tmpfs, for cryptsetup luksAddKey (required)")
 		yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
 		pepper := fs.Bool("pepper", false, "The key needs an operator's pepper too, asked here; every boot waits for an approval with it")
-		keyboard := fs.Bool("keyboard", false, "The vault keeps a salt typed through a one-time keyboard, and can read it; it shows keys to press at every boot")
-		keyboardLength := fs.Int("keyboard-length", attest.KeyboardDefaultLength, "With --keyboard: the salt's characters, 8 to 32")
+		keyboard := fs.Bool("keyboard-pepper", false, "A pepper of yours, asked here, typed at every boot through the one-time keyboard layout the vault shows with each release; nothing keeps it")
 		parseSigning(fs, args[1:])
 		if err := admin.VaultEnrol(admin.VaultEnrolOptions{TPMPath: *tpm, SealIndex: nvslot.ResolveNVRAMIndex(uint32(*nvram)),
 			URL: *vaultURL, Pin: *pin, Token: *token, Label: *label, Name: *name, Pepper: *pepper, PrivKeyPath: *privKey,
-			CA: *ca, Out: *out, Yes: *yes, Debug: *debug, Keyboard: *keyboard, KeyboardLength: *keyboardLength, TypedPassword: *keyboard}); err != nil {
+			CA: *ca, Out: *out, Yes: *yes, Debug: *debug, Keyboard: *keyboard, TypedPassword: *keyboard}); err != nil {
 			fail(err)
 		}
 	case "status":
@@ -810,7 +807,7 @@ func recipeFlags(fs *flag.FlagSet) (password, salt *string, pepper, keyboard *bo
 	password = fs.String("password", "typed", "Where the password comes from: typed (at the machine, its console or the boot SSH server) or tpm (held by this TPM: unattended)")
 	salt = fs.String("salt", "", "Where the salt comes from: typed (the recovery recipe), tpm, phone or vault (required)")
 	pepper = fs.Bool("pepper", false, "The vault releases the salt only with an operator's pepper, entered at its approval")
-	keyboard = fs.Bool("keyboard", false, "The phone or the vault holds the salt and shows keys to press, through a one-time keyboard")
+	keyboard = fs.Bool("keyboard-pepper", false, "With --salt phone or vault: a pepper of yours, typed at every boot through the one-time keyboard layout the phone or the vault shows; nothing keeps it")
 	return password, salt, pepper, keyboard
 }
 
@@ -865,16 +862,15 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 	adapterWait := fs.Duration("adapter-wait", 30*time.Second, "Wait this long for the adapter to appear")
 	yes := fs.Bool("yes", false, "The recovery passphrase is in a second keyslot already; do not ask")
 	debug := fs.Bool("debug", debugFlag, "Enable debug output")
-	keyboard := fs.Bool("keyboard", false, "The phone keeps a salt typed through a one-time keyboard, and can read it; it shows keys to press at every boot")
-	keyboardLength := fs.Int("keyboard-length", attest.KeyboardDefaultLength, "With --keyboard: the salt's characters, 8 to 32")
+	keyboard := fs.Bool("keyboard-pepper", false, "A pepper of yours, asked here, typed at every boot through the one-time keyboard layout the phone shows; nothing keeps it")
 	parseSigning(fs, args[1:])
 	var slot uint32
 	if nvramExplicit(args[1:]) {
 		slot = nvslot.ResolveNVRAMIndex(uint32(*nvram))
 	}
 	if err := admin.FactorEnrol(admin.FactorEnrolOptions{
-		Keyboard: *keyboard, KeyboardLength: *keyboardLength,
-		TPMPath: *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
+		Keyboard: *keyboard,
+		TPMPath:  *tpm, SealIndex: slot, Label: *label, Out: *out, PrivKeyPath: *privKey, PubKeyPath: *pubKey,
 		Adapter: *adapter, Timeout: *timeout, AdapterWait: *adapterWait, Yes: *yes, Debug: *debug,
 		Rotate: args[0] == "rotate",
 	}); err != nil {
@@ -884,9 +880,9 @@ func runPhoneSalt(args []string, tpmPath string, debugFlag bool) {
 
 const factorUsage = `tpm2-kira phone salt enrol | rotate | status | unenrol [options]
 
-  --keyboard          enrol: a salt typed through a one-time keyboard (docs/DISK-KEY.md): the
-                      phone keeps the salt, and can read it, and shows keys to press at every boot
-  --keyboard-length N its characters, 8 to 32 (default 8)
+  --keyboard-pepper   enrol: a pepper of yours as well (docs/DISK-KEY.md), 8 to 64 of a-z and
+                      0-9, asked here; at every boot you type it through the one-time keyboard
+                      layout the phone shows with the salt. Nothing keeps it.
 
 The phone salt (docs/PLAN-PHONESALT.md): the salt of the disk's key,
 kept by the verifier that attests this machine - today the phone enrolled

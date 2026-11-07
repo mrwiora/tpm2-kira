@@ -37,10 +37,9 @@ type FactorEnrolOptions struct {
 	AdapterWait time.Duration
 	Yes         bool // the recovery keyslot exists, no question asked
 	Debug       bool
-	// Keyboard: the phone keeps a salt typed through its one-time keyboard, of KeyboardLength
-	// characters (0: the default), and shows the keys to press at every boot.
-	Keyboard       bool
-	KeyboardLength int
+	// Keyboard: the keyslot takes a pepper of the person's, typed at every boot through the
+	// one-time layout the phone shows with the salt (core/attest/keyboard.go).
+	Keyboard bool
 }
 
 // FactorEnrol gives the enrolled phone a factor to keep and derives the
@@ -85,7 +84,7 @@ func FactorEnrol(o FactorEnrolOptions) error {
 	}
 	mark := "--salt phone"
 	if o.Keyboard {
-		mark += " --keyboard"
+		mark += " --keyboard-pepper"
 	}
 	fmt.Printf("Then: tpm2-kira luks mark <device> --keyslot N %s. The mark\n", mark)
 	fmt.Println("is all the boot needs: it reads the recipe from the header, and once the phone has")
@@ -159,32 +158,19 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 		fmt.Printf("Release key created for slot %d, under the slot's policy\n", slot)
 	}
 
-	var want []byte
-	var keepFactor *attest.FactorBlob
+	f, w, err := phonegate.WrapFactor(tpmDev, att, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer wipe.Bytes(f)
+	want := phonegate.FactorSalt(f, label)
+	defer wipe.Bytes(want)
+	keepFactor := &attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label}
 	var keepKeyboard *attest.KeyboardKeep
 	if o.Keyboard {
-		n := o.KeyboardLength
-		if n == 0 {
-			n = attest.KeyboardDefaultLength
-		}
-		salt, err := attest.NewKeyboardSalt(nil, n)
-		if err != nil {
-			return nil, 0, err
-		}
-		defer wipe.Bytes(salt)
-		want = phonegate.FactorSalt(salt, label)
 		p := &sealed.Payload
-		keepKeyboard = &attest.KeyboardKeep{Salt: append([]byte(nil), salt...), ReleaseKeyPublic: att.ReleaseKeyPublic, SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef, Label: label}
-	} else {
-		f, w, err := phonegate.WrapFactor(tpmDev, att, nil)
-		if err != nil {
-			return nil, 0, err
-		}
-		defer wipe.Bytes(f)
-		want = phonegate.FactorSalt(f, label)
-		keepFactor = &attest.FactorBlob{CredentialBlob: w.Credential, EncryptedSecret: w.EncryptedSecret, Label: label}
+		keepKeyboard = &attest.KeyboardKeep{ReleaseKeyPublic: att.ReleaseKeyPublic, SigningPublic: p.SigningPublic, PolicyRef: p.PolicyRef}
 	}
-	defer wipe.Bytes(want)
 
 	// The phone keeps the credential in an ordinary check of the booted
 	// system (the quote says which boot this is; the boot key is locked
@@ -197,10 +183,9 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	}
 	// The boot is closed here: the channel's secrets open with the signing key.
 	svc := phonegate.NewGateServiceOpening(phonegate.OpenChannelSigned(priv), tpmDev, idx, pubKeyPath, o.Debug)
+	svc.Keep(keepFactor)
 	if keepKeyboard != nil {
 		svc.KeepKeyboard(keepKeyboard)
-	} else {
-		svc.Keep(keepFactor)
 	}
 	fmt.Println("Open Marify on the phone and verify this machine: the verdict screen asks")
 	fmt.Println("to keep the phone salt (no code: after boot the boot key is locked). Continue")
@@ -210,12 +195,11 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if code != 0 || !svc.Returned() {
 		return nil, 0, fmt.Errorf("the phone did not return the phone salt (gate exit %d); nothing was enrolled. Check the phone's screen and run this again", code)
 	}
+	fmt.Println("The phone keeps the phone salt and gave it back unchanged. This TPM opens it at")
+	fmt.Println("the next boot, under the slot's policy; the boot log says so.")
 	if o.Keyboard {
-		fmt.Println("The phone keeps the salt. From the next boot on it shows the keys to press at the")
-		fmt.Println("machine, different every time; this TPM opens the keyboard under the slot's policy.")
-	} else {
-		fmt.Println("The phone keeps the phone salt and gave it back unchanged. This TPM opens it at")
-		fmt.Println("the next boot, under the slot's policy; the boot log says so.")
+		fmt.Println("With it the phone shows a one-time keyboard layout at every boot, different every")
+		fmt.Println("time, to type your pepper through.")
 	}
 
 	pw, err := terminalPassword("Password for the disk (the factor's other half): ")
@@ -231,8 +215,18 @@ func remoteSaltKey(o FactorEnrolOptions) ([]byte, uint32, error) {
 	if !bytes.Equal(pw, again) {
 		return nil, 0, errors.New("the passwords differ; nothing was written")
 	}
+	salt := want
+	if o.Keyboard {
+		pepper, err := askKeyboardPepper()
+		if err != nil {
+			return nil, 0, err
+		}
+		salt = diskkey.KeyboardSalt(want, pepper)
+		wipe.Bytes(pepper)
+		defer wipe.Bytes(salt)
+	}
 	fmt.Fprintln(os.Stderr, "Deriving the key (Argon2id, 1 GiB, a few seconds) ...")
-	key, err := diskkey.Combine(pw, want)
+	key, err := diskkey.Combine(pw, salt)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -408,4 +402,30 @@ func FactorUnenrol(tpmPath string, sealIndex uint32, privKeyPath string, debug b
 	fmt.Println("Remove the salt's keyslot by hand: cryptsetup luksKillSlot <device> N")
 	fmt.Println("('cryptsetup luksDump' lists them). The recovery passphrase stays.")
 	return nil
+}
+
+// askKeyboardPepper asks, twice, for the pepper typed at every boot through the one-time keyboard:
+// here in plain, echo off. No device keeps it; letters and digits alone, as the layout has them.
+func askKeyboardPepper() ([]byte, error) {
+	fmt.Fprintf(os.Stderr, "The pepper is yours alone: no device keeps it. %d to %d characters, a-z and 0-9.\n", attest.KeyboardPepperMin, attest.KeyboardPepperMax)
+	fmt.Fprintln(os.Stderr, "At boot you type it through the layout the phone or the vault shows; here as it is.")
+	p, err := terminalAsk("Pepper: ")
+	if err != nil {
+		return nil, err
+	}
+	if err := attest.CheckKeyboardPepper(p); err != nil {
+		wipe.Bytes(p)
+		return nil, fmt.Errorf("%w; nothing was written", err)
+	}
+	again, err := terminalAsk("The same pepper again: ")
+	if err != nil {
+		wipe.Bytes(p)
+		return nil, err
+	}
+	defer wipe.Bytes(again)
+	if !bytes.Equal(p, again) {
+		wipe.Bytes(p)
+		return nil, errors.New("the peppers differ; nothing was written")
+	}
+	return p, nil
 }

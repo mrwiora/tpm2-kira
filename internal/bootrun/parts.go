@@ -438,11 +438,11 @@ func (p *unlockPart) start(bd *board) {
 	}
 	salt := func(volume string, r diskkey.Recipe) []byte {
 		switch r {
-		case diskkey.RecipePhoneSalt:
+		case diskkey.RecipePhoneSalt, diskkey.RecipePhoneKeyboard:
 			if bd.salt != nil {
 				return bd.salt()
 			}
-		case diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper:
+		case diskkey.RecipeVaultSalt, diskkey.RecipeVaultSaltPepper, diskkey.RecipeVaultKeyboard:
 			if bd.vaultSalt != nil {
 				return bd.vaultSalt(volume, r)
 			}

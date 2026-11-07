@@ -48,17 +48,14 @@ type testVault struct {
 	nonces  map[string][]byte
 	refused []string
 	peppers [][]byte // given with the releases of a pepper device, in turn
-	// A salt typed through a keyboard, as the vault's server does it: the keys, K, the request.
-	keys      []byte
-	key       []byte
-	requestID string
-	gave      int
+	// A keyboard device's layout of the last release, as the vault's server shows it.
+	layout *attest.KeyboardLayout
+	gave   int
 }
 
 func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	rw := w
 	fail := func(msg string) {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(vaultproto.ErrorResponse{Error: msg})
@@ -115,26 +112,6 @@ func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v.minGen = checked.Generation
-		if v.enrol.KeyboardSalt != nil {
-			name, err := v.enrol.ReleaseKeyName()
-			if err != nil {
-				fail(err.Error())
-				return
-			}
-			pad, _ := attest.NewKeyboardPad(rand.Reader, len(v.enrol.KeyboardSalt))
-			if v.keys, err = attest.KeyboardKeys(v.enrol.KeyboardSalt, pad); err != nil {
-				fail(err.Error())
-				return
-			}
-			wrapped, k, err := vaultproto.WrapKeyboard(rand.Reader, v.enrol.EKPublic, name, v.enrol.DeviceID, pad)
-			if err != nil {
-				fail(err.Error())
-				return
-			}
-			v.key, v.requestID = k, req.RequestID
-			json.NewEncoder(rw).Encode(vaultproto.ReleaseResponse{Status: vaultproto.StatusKeyboard, Keyboard: wrapped})
-			return
-		}
 		rsp := vaultproto.ReleaseResponse{Status: vaultproto.StatusReleased, Remote: &v.remote}
 		if v.enrol.Pepper && v.gave < len(v.peppers) {
 			name, err := v.enrol.ReleaseKeyName()
@@ -147,32 +124,18 @@ func (v *testVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		v.gave++
-		json.NewEncoder(w).Encode(rsp)
-	case vaultproto.PathKeyboard:
-		var req vaultproto.KeyboardRequest
-		if json.NewDecoder(r.Body).Decode(&req) != nil || req.RequestID != v.requestID {
-			fail("no keys were shown")
-			return
-		}
-		if !vaultproto.CheckKeyboardProof(v.key, v.requestID, v.keys, req.Proof) {
-			json.NewEncoder(w).Encode(vaultproto.KeyboardResponse{Status: vaultproto.StatusWrongKeys})
-			return
-		}
-		rsp := vaultproto.KeyboardResponse{Status: vaultproto.StatusReleased}
-		if v.enrol.Pepper {
-			if v.gave == 0 {
-				v.gave++
-				json.NewEncoder(w).Encode(vaultproto.KeyboardResponse{Status: vaultproto.StatusPending, RetryAfter: 1})
-				return
-			}
-			ct, err := vaultproto.SealKeyboardPepper(rand.Reader, v.key, v.enrol.DeviceID, v.peppers[0])
+		if v.enrol.Keyboard {
+			name, err := v.enrol.ReleaseKeyName()
 			if err != nil {
 				fail(err.Error())
 				return
 			}
-			rsp.Pepper = ct
+			if rsp.Keyboard, v.layout, err = vaultproto.WrapKeyboard(rand.Reader, v.enrol.EKPublic, name); err != nil {
+				fail(err.Error())
+				return
+			}
 		}
+		v.gave++
 		json.NewEncoder(w).Encode(rsp)
 	default:
 		http.NotFound(w, r)

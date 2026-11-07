@@ -1605,22 +1605,24 @@ the machine's prompt comes when the vault refuses, as for any other refusal.
 **What it rests on, in the vault's case too:** the firmware's measurement. On the VMs a real
 `on` has now gone through it, keys in the firmware (§17.2).
 
-### 13.5b The one-time keyboard: what it gives up
+### 13.5b The one-time keyboard: what it adds and what it does not
 
-The salt typed through a one-time keyboard ([DISK-KEY.md](DISK-KEY.md)) answers a recording of the
-keyboard, which a salt typed in the clear (`0x1100`) does not. Its keys are uniformly random under a
-fresh pad per boot, so nothing of the salt is in them, not even which characters repeat. The pad is
-wrapped for the TPM and the slot's release key, on top of the channel, so keys alone or pad alone are
-worth nothing.
+A pepper typed through a one-time keyboard ([DISK-KEY.md](DISK-KEY.md)) is a secret no device keeps,
+in the key beside the 256-bit salt of the phone or the vault, which neither can read. It answers a
+recording of the keyboard, which a password or a salt typed in the clear (`0x1100`) does not: the
+keys are the pepper through a permutation of the 36 keys drawn for this boot, from a seed wrapped for
+the TPM and the slot's release key on top of the channel. Keys alone, or layout alone, give nothing
+of the pepper; the next boot's layout is another.
 
-It is no stronger salt. **The holder can read it:** a stolen phone with its keystore unlocked, or a
-vault's memory, gives the salt, where `0x1300` and `0x1400` give what only this TPM opens. **It is
-short:** 8 characters of 30 are about 39 bits, so at Argon2id's second a guess a stolen disk costs some
-17 000 years of one machine per password guessed, far from 256 bits and much too little alone: the
-password carries the rest. **The password is still typed in the clear**, and a recording has that. **A
-machine compromised while attested** sees keys and mapping together. Tests: `TestKeyboardKeysSayNothing`,
-`TestPhoneKeyboard`, `TestPhoneKeyboardRefusesAnotherKey`, `TestPhoneKeyboardOnATPM`,
-`TestVaultKeyboardOnATPM`, the vault's `TestKeyboard*`.
+**What it shows:** one layout for the boot, so a recording has the pepper's length and its pattern of
+repeats. Of 36 characters, a pepper of 8 is about 41 bits, and that pattern takes some from it: the
+pepper is an addition to the salt and the password, not the key's strength. **The phone or the vault
+sees the layout**, and a party that has both the layout (the phone's screen, the vault's memory or its
+operators' view for 15 minutes) and a recording of the keys has the pepper. **The password is still
+typed in the clear.** **A machine compromised while attested** sees keys and layout together. Tests:
+`TestKeyboardLayoutFromTheSeed`, `TestPhoneKeyboard`, `TestPhoneKeyboardRefusesAnotherKey`,
+`TestPhoneKeyboardOnATPM`, `TestVaultKeyboardOnATPM`, the vault's `TestKeyboard*`,
+`TestDemoMachineKeyboard`, Marify's `keyboardLayoutIsTheMachines`.
 
 ### 13.5a Whether the quote covers the initrd
 

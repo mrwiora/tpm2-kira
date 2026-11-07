@@ -616,14 +616,16 @@ whoever holds the vault. What the machine and the vault do with it is in
 
 ## 12a The one-time keyboard
 
-A device enrolled with `--keyboard` (recipes `0x1402`, `0x1403`; [DISK-KEY.md](DISK-KEY.md#the-salt-typed-through-a-one-time-keyboard-0x1302-0x1402-0x1403))
-keeps a salt, not R: encrypted the same way, but the vault can read it. A verified release answers
-`keyboard`: this boot's pad under a fresh key K, K wrapped for the TPM. The keys to press are in
-`tpm2-kira-vault requests` and in `keys` of `GET /v1/requests`, and nowhere in the audit. The machine
-proves what was typed with an HMAC under K at `POST /v1/keyboard`, which answers `released`, `pending`
-(the pepper is awaited: the same request again), `wrong_keys` or `denied`, after three wrong. A device
-in approve mode is approved first; with a pepper the keys come first, and `request approve` takes the
-pepper only after them. The pepper then comes under K, since the machine's TPM is closed by then.
+A device enrolled with `--keyboard-pepper` (recipe `0x1402`; [DISK-KEY.md](DISK-KEY.md#a-pepper-typed-through-a-one-time-keyboard-0x1302-0x1402))
+is enrolled as any other, R and all, with `keyboard` in its enrolment. Every release of R then
+carries `keyboard` beside it: a seed drawn for this boot, `TPM2_MakeCredential` for the EK and the
+slot's release key, so it opens where R opens. The layout it stands for, which the person types a
+pepper of their own through at the machine, is in `tpm2-kira-vault requests` (drawn on a US keyboard:
+each key above the character it types) and in `keyboard_keys` and `layout` of `GET /v1/requests`, as
+a request in state `released`, for 15 minutes (`LayoutTTL`). It is kept in memory alone, never in the
+audit, which says only "with a one-time keyboard". The pepper never reaches the vault, and the vault
+cannot tell a right one from a wrong one. Approve mode works as for any device; an operator's pepper
+(`--pepper`) is not taken together with it.
 
 ## 13. Known limits
 

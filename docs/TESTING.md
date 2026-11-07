@@ -117,7 +117,7 @@ runs when named in `--only`:
 | `debian-resume` | Debian: the hibernation and the resume; its kernel refuses the image in most runs |
 | `vault-alone` | the unattended recipe, Secure Boot on: a boot nobody touches, the vault alone |
 | `typed-vault` | the operator-approved typed vault (0x1401), Secure Boot on |
-| `keyboard-vault` | the salt typed through the vault's one-time keyboard, with a pepper (0x1403): two boots with other keys, wrong keys, the pepper after them, Secure Boot on |
+| `keyboard-vault` | a pepper typed through the vault's one-time keyboard (0x1402): two boots with other layouts, a pepper not of the layout's form asked again, a wrong pepper opening nothing, the right one the disk, Secure Boot on |
 | `V3` | Arch: the resume with tpm2-kira masked, the close alone |
 | `V6` | `control` on unencrypted swap |
 | `no-tpm` | V4 step 5: a boot with no TPM at all |

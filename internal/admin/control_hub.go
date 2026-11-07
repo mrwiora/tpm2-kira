@@ -384,8 +384,8 @@ func (c *controller) diskSteps() []controlStep {
 		remote.Blocked = "this boot did not pass tpm2-kira's code screen: reboot, then enrol the salt - the phone would otherwise call the boot key refused instead of locked"
 	}
 	keyboard := remote
-	keyboard.Key, keyboard.Title = "luks-remote-keyboard", "Password, salt typed through the phone's one-time keyboard (0x1302)"
-	keyboard.Explain = "A LUKS keyslot whose salt you type at the machine: at every boot the phone shows other keys to press, and this TPM opens the mapping that makes them your salt, so a recording of the keys is no use. The phone holds this salt and can read it, which it cannot with 0x1300; the salt has 8 characters, and the password is still typed in the clear."
+	keyboard.Key, keyboard.Title = "luks-remote-keyboard", "Password, salt from the phone, pepper typed through its one-time keyboard (0x1302)"
+	keyboard.Explain = "A LUKS keyslot of 0x1300 with a pepper of yours as well, which nothing keeps: at every boot the phone shows a keyboard layout, other every time, that this TPM opens with the salt; you type the pepper through it, so a recording of the keys is no use. The password is still typed in the clear."
 	keyboard.Run = func(c *controller) error { return c.runLuks(diskkey.RecipePhoneKeyboard) }
 	keyboard.Done = ""
 	if done := c.boundKeyslots(strongSlot(strong), diskkey.RecipePhoneKeyboard); strong != nil && len(done) > 0 {

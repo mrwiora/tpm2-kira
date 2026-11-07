@@ -3,130 +3,117 @@ package attest_test
 import (
 	"bytes"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	. "github.com/tpm2-trust/tpm2-kira/core/attest"
 )
 
-func TestKeyboardRoundTrip(t *testing.T) {
-	for _, n := range []int{KeyboardMinLength, 16, KeyboardMaxLength} {
-		salt, err := NewKeyboardSalt(nil, n)
+func seedOf(b byte) []byte { return bytes.Repeat([]byte{b}, KeyboardSeedSize) }
+
+// A layout is a permutation of the keys; the pepper goes there and back, capitals for their keys.
+func TestKeyboardLayoutRoundTrip(t *testing.T) {
+	for b := byte(0); b < 20; b++ {
+		l, err := KeyboardLayoutOf(seedOf(b))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckKeyboardSalt(salt); err != nil {
-			t.Fatal(err)
+		shown := []byte(l.String())
+		sorted, wantSorted := slices.Sorted(slices.Values(shown)), slices.Sorted(slices.Values([]byte(KeyboardKeys)))
+		if !bytes.Equal(sorted, wantSorted) {
+			t.Fatalf("not a permutation: %s", shown)
 		}
-		pad, err := NewKeyboardPad(nil, n)
+		pepper := []byte("correct9horse")
+		keys, err := l.Keys(pepper)
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys, err := KeyboardKeys(salt, pad)
-		if err != nil {
-			t.Fatal(err)
+		got, err := l.Pepper(keys)
+		if err != nil || !bytes.Equal(got, pepper) {
+			t.Fatalf("%s through %s: %s, %v", keys, shown, got, err)
 		}
-		got, err := KeyboardSaltOf(keys, pad)
-		if err != nil || !bytes.Equal(got, salt) {
-			t.Fatalf("%s through %v: %s, %v", keys, pad, got, err)
-		}
-		got, err = KeyboardSaltOf(bytes.ToUpper(keys), pad)
-		if err != nil || !bytes.Equal(got, salt) {
+		if got, err = l.Pepper(bytes.ToUpper(keys)); err != nil || !bytes.Equal(got, pepper) {
 			t.Fatalf("in capitals: %s, %v", got, err)
 		}
 	}
 }
 
-// The same salt gives other keys each boot, and every position takes every key: a recording says
-// nothing, not even which characters of the salt repeat.
-func TestKeyboardKeysSayNothing(t *testing.T) {
-	salt := []byte("aaaaaaaa")
-	seen := make([]map[byte]bool, len(salt))
+// The same seed makes the same layout on the phone and the machine; another seed another one, and
+// over many seeds every key shows every character.
+func TestKeyboardLayoutFromTheSeed(t *testing.T) {
+	a, _ := KeyboardLayoutOf(seedOf(1))
+	b, _ := KeyboardLayoutOf(seedOf(1))
+	c, _ := KeyboardLayoutOf(seedOf(2))
+	if a.String() != b.String() || a.String() == c.String() {
+		t.Fatalf("%s %s %s", a, b, c)
+	}
+	seen := make([]map[byte]bool, len(KeyboardKeys))
 	for i := range seen {
 		seen[i] = map[byte]bool{}
 	}
-	sameEveryTime, equalAdjacent := true, 0
-	var first []byte
-	const rounds = 4000
+	fixed := 0
+	const rounds = 3000
 	for r := 0; r < rounds; r++ {
-		pad, err := NewKeyboardPad(nil, len(salt))
+		seed, err := NewKeyboardSeed(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys, err := KeyboardKeys(salt, pad)
+		l, err := KeyboardLayoutOf(seed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if first == nil {
-			first = keys
-		} else if !bytes.Equal(first, keys) {
-			sameEveryTime = false
+		for i, c := range l.Shows {
+			seen[i][c] = true
+			if c == KeyboardKeys[i] {
+				fixed++
+			}
 		}
-		for i, k := range keys {
-			seen[i][k] = true
-		}
-		if keys[0] == keys[1] {
-			equalAdjacent++
-		}
-	}
-	if sameEveryTime {
-		t.Error("the keys do not change")
 	}
 	for i, s := range seen {
-		if len(s) != len(KeyboardAlphabet) {
-			t.Errorf("position %d took %d of %d keys", i, len(s), len(KeyboardAlphabet))
+		if len(s) != len(KeyboardKeys) {
+			t.Errorf("key %c showed %d of %d characters", KeyboardKeys[i], len(s), len(KeyboardKeys))
 		}
 	}
-	// A salt of one repeated character shows no repeats beyond chance (1 in 30).
-	if equalAdjacent > rounds/10 {
-		t.Errorf("adjacent keys equal %d of %d times", equalAdjacent, rounds)
+	// A uniform permutation leaves one key in its place on average.
+	if fixed > 2*rounds {
+		t.Errorf("%d keys of %d layouts show themselves", fixed, rounds)
 	}
 }
 
-func TestKeyboardRefuses(t *testing.T) {
-	for name, s := range map[string][]byte{
-		"too short": []byte("abcdefg"), "too long": bytes.Repeat([]byte("a"), KeyboardMaxLength+1),
-		"a y": []byte("abcdefgy"), "an l": []byte("abcdefgl"), "capitals": []byte("ABCDEFGH"), "a space": []byte("abcd fgh"),
+func TestKeyboardPepperRefuses(t *testing.T) {
+	l, _ := KeyboardLayoutOf(seedOf(3))
+	for name, p := range map[string][]byte{
+		"too short": []byte("abcdefg"), "too long": bytes.Repeat([]byte("a"), KeyboardPepperMax+1),
+		"a space": []byte("abcd fgh"), "a dash": []byte("abcd-fgh"), "empty": {},
 	} {
-		if CheckKeyboardSalt(s) == nil {
-			t.Errorf("%s is taken for a salt", name)
+		if _, err := l.Pepper(p); !errors.Is(err, ErrKeyboardPepper) {
+			t.Errorf("typed %s: %v", name, err)
+		}
+		if CheckKeyboardPepper(p) == nil {
+			t.Errorf("%s is taken for a pepper", name)
 		}
 	}
-	if _, err := NewKeyboardSalt(nil, KeyboardMinLength-1); err == nil {
-		t.Error("a short salt was drawn")
+	if CheckKeyboardPepper([]byte("ABCDEFGH")) == nil {
+		t.Error("a pepper is set in capitals")
 	}
-	pad := make([]byte, 8)
-	for name, keys := range map[string][]byte{"too short": []byte("abc"), "outside": []byte("abcdefgy"), "empty": {}} {
-		if _, err := KeyboardSaltOf(keys, pad); !errors.Is(err, ErrKeyboardKeys) {
-			t.Errorf("%s: %v", name, err)
-		}
+	if CheckKeyboardPepper([]byte("abc12345")) != nil {
+		t.Error("letters and digits are refused")
 	}
-	if _, err := KeyboardKeys([]byte("abcdefgh"), []byte{30, 0, 0, 0, 0, 0, 0, 0}); err == nil {
-		t.Error("a pad value outside the alphabet was taken")
+	if _, err := KeyboardLayoutOf(seedOf(1)[:16]); err == nil {
+		t.Error("a short seed was taken")
 	}
 }
 
-// The phone's pad from its secret: the same for the same secret, another for another, and in range.
-func TestKeyboardPadFrom(t *testing.T) {
-	a := bytes.Repeat([]byte{1}, KeyboardSecretSize)
-	p1, err := KeyboardPadFrom(a, 16)
-	if err != nil {
-		t.Fatal(err)
+// The US arrangement holds every key once.
+func TestKeyboardUS(t *testing.T) {
+	all := strings.Join(KeyboardUS, "")
+	if len(all) != len(KeyboardKeys) {
+		t.Fatalf("%d keys", len(all))
 	}
-	p2, _ := KeyboardPadFrom(a, 16)
-	p3, _ := KeyboardPadFrom(bytes.Repeat([]byte{2}, KeyboardSecretSize), 16)
-	if !bytes.Equal(p1, p2) || bytes.Equal(p1, p3) {
-		t.Fatalf("%v %v %v", p1, p2, p3)
-	}
-	short, _ := KeyboardPadFrom(a, 8)
-	if !bytes.Equal(short, p1[:8]) {
-		t.Fatalf("a shorter salt has another start: %v %v", short, p1)
-	}
-	for _, v := range p1 {
-		if int(v) >= len(KeyboardAlphabet) {
-			t.Fatalf("out of range: %v", p1)
+	for _, c := range KeyboardKeys {
+		if strings.Count(all, string(c)) != 1 {
+			t.Errorf("%c", c)
 		}
-	}
-	if _, err := KeyboardPadFrom(a[:8], 8); err == nil {
-		t.Fatal("a short secret was taken")
 	}
 }

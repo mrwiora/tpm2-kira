@@ -5,6 +5,8 @@ package diskkey
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -292,6 +294,9 @@ var ErrUnlockSkipped = errors.New("not tpm2-kira's to answer; cryptsetup's own p
 //	0x1400, 0x1401 the vault  a typed password and the salt the vault released while the code
 //	                          screen held (internal/vaultkey/vault.go); without one, a typed
 //	                          salt - the recovery recipe
+//	0x1302, 0x1402 keyboard   a typed password, the salt of the phone or the vault, and a pepper
+//	                          typed through the one-time layout it showed (keyboardKey); without
+//	                          salt and layout, a typed salt - the recovery recipe
 //	0x1200 salt in this TPM   a typed password and the salt the TPM opened while the code
 //	                          screen held (internal/admin/tpmsalt_enrol.go); without one, a
 //	                          typed salt - the recovery recipe
@@ -326,9 +331,13 @@ func DiskKey(salt func(volume string, r Recipe) []byte, keyboard func(volume str
 			// A typed recipe: the first the volume has, after a vault that
 			// gave no key.
 			if r.Keyboard() {
+				var sess KeyboardSession
 				if keyboard != nil {
-					if sess := keyboard(volume, r); sess != nil {
-						return keyboardKey(volume, r, vaultErr, sess, ask)
+					sess = keyboard(volume, r)
+				}
+				if sess != nil {
+					if dev := salt(volume, r); dev != nil {
+						return keyboardKey(volume, vaultErr, dev, sess, ask)
 					}
 				}
 				return typedKey(volume, RecipeRecovery, noKeyboard(r, vaultErr), salt, ask)
@@ -345,20 +354,17 @@ func DiskKey(salt func(volume string, r Recipe) []byte, keyboard func(volume str
 	}
 }
 
-// KeyboardSession is this boot's one-time keyboard of a salt typed through it: the phone's or the
-// vault's. Salt takes what was typed and gives the salt for the combiner, or ErrWrongKeys to ask
-// again; the vault's says so itself and may wait for an operator's pepper. NeedKeys is false once it
-// has what it needs: a key that opens nothing is asked for again, and the keys need not be.
+// KeyboardSession is this boot's one-time keyboard: the layout the phone or the vault showed, which
+// the TPM opened. Pepper maps what was typed back to the pepper, or says ErrNotAPepper.
 type KeyboardSession interface {
-	NeedKeys() bool
 	From() string // "your phone", "the vault"
-	Salt(keys []byte) ([]byte, error)
+	Pepper(typed []byte) ([]byte, error)
 }
 
-// ErrWrongKeys says what was typed is not what the phone or the vault shows.
-var ErrWrongKeys = errors.New("those are not the keys shown")
+// ErrNotAPepper says what was typed cannot be a pepper: its length or a key outside the layout.
+var ErrNotAPepper = errors.New("not a pepper: 8 to 64 keys, letters and digits alone")
 
-// keyboardTries bounds the questions for the keys per key asked for.
+// keyboardTries bounds the questions for a pepper of the wrong form.
 const keyboardTries = 3
 
 func noKeyboard(r Recipe, vaultErr error) error {
@@ -367,17 +373,29 @@ func noKeyboard(r Recipe, vaultErr error) error {
 		from = "the vault"
 	}
 	if vaultErr != nil {
-		return fmt.Errorf("no keyboard from %s (%w)", from, vaultErr)
+		return fmt.Errorf("no salt and keyboard from %s (%w)", from, vaultErr)
 	}
-	return fmt.Errorf("no keyboard from %s", from)
+	return fmt.Errorf("no salt and keyboard from %s", from)
 }
 
-// keyboardKey makes the key of a salt typed through the keyboard: the password, then the keys the
-// phone or the vault shows, through this boot's pad. The keys are one-time, so no recording of them
-// is of use; the password is typed as ever.
-func keyboardKey(volume string, r Recipe, vaultErr error, sess KeyboardSession, ask Prompter) ([]byte, error) {
-	note := "the key is derived from your password and a salt you type through a one-time keyboard:\n" +
-		"press the keys " + sess.From() + " shows, not your salt. They hold for this boot alone.\n" +
+// KeyboardSalt is the salt of a keyslot with a pepper typed through the keyboard: the device's salt
+// with the person's pepper, HMAC-SHA256(salt, label ‖ pepper). The caller wipes it.
+func KeyboardSalt(salt, pepper []byte) []byte {
+	m := hmac.New(sha256.New, salt)
+	m.Write([]byte("tpm2-kira/keyboard-pepper/v1"))
+	m.Write(pepper)
+	return m.Sum(nil)
+}
+
+// keyboardKey makes the key of a keyslot with a pepper typed through the keyboard: the password,
+// then the pepper through this boot's layout, which the phone or the vault shows, with the device's
+// salt. A recording of the keys is of no use without the layout; the password is typed as ever.
+// A wrong pepper of the right form makes a key that opens nothing, as a mistyped password does.
+func keyboardKey(volume string, vaultErr error, salt []byte, sess KeyboardSession, ask Prompter) ([]byte, error) {
+	defer wipe.Bytes(salt)
+	note := "the key is derived from your password, the salt " + sess.From() + " released and your pepper.\n" +
+		"Type the pepper through the one-time layout " + sess.From() + " shows: for each character, the key it\n" +
+		"is shown on. The layout holds for this boot alone.\n" +
 		"Ctrl-C: cryptsetup's own prompt, where the recovery passphrase works."
 	if vaultErr != nil {
 		note = fmt.Sprintf("no key from the vault (%v):\n", vaultErr) + note
@@ -387,26 +405,26 @@ func keyboardKey(volume string, r Recipe, vaultErr error, sess KeyboardSession, 
 		return nil, err
 	}
 	defer wipe.Bytes(pw)
-	keysNote := ""
+	pepperNote := ""
 	for try := 0; ; try++ {
-		var keys []byte
-		if sess.NeedKeys() {
-			if keys, err = ask(volume, "Keys", keysNote); err != nil {
-				return nil, err
-			}
+		typed, err := ask(volume, "Pepper", pepperNote)
+		if err != nil {
+			return nil, err
 		}
-		s, err := sess.Salt(keys)
-		wipe.Bytes(keys)
-		if errors.Is(err, ErrWrongKeys) {
+		p, err := sess.Pepper(typed)
+		wipe.Bytes(typed)
+		if errors.Is(err, ErrNotAPepper) {
 			if try+1 >= keyboardTries {
 				return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, err)
 			}
-			keysNote = "those are not the keys shown. Press the keys " + sess.From() + " shows."
+			pepperNote = err.Error() + ". Type it through the layout " + sess.From() + " shows."
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%w (%v)", ErrUnlockSkipped, err)
 		}
+		s := KeyboardSalt(salt, p)
+		wipe.Bytes(p)
 		defer wipe.Bytes(s)
 		return derive(pw, s)
 	}
@@ -471,7 +489,7 @@ type Prompter func(volume, what, note string) ([]byte, error)
 // tag saying what the key is made of and where Ctrl-C leads, then the
 // question in bold, as systemd's own prompt is - "Password" is what the
 // person types, "Salt" the second part they type in the recovery recipe,
-// "Keys" what a phone or a vault shows for a salt typed through its keyboard;
+// "Pepper" the one typed through the one-time keyboard of a phone or a vault;
 // the phone's salt is never asked for.
 //
 //	[ KIRA ] Disk cryptroot: the key is derived from your password and the salt your phone returned.

@@ -116,9 +116,11 @@ defined in [PROTOCOL-BLE.md](PROTOCOL-BLE.md), the design in
 [PLAN-PHONE.md](PLAN-PHONE.md) and
 [PLAN-BLE.md](PLAN-BLE.md).
 
-## The keys to press
+## The one-time keyboard
 
-With a keyslot of `0x1302` the phone shows, after a trusted verdict, the keys to press at the machine
-for this boot alone: a salt typed through a one-time keyboard, which this phone holds and can read
-([DISK-KEY.md](DISK-KEY.md#the-salt-typed-through-a-one-time-keyboard-0x1302-0x1402-0x1403)). `phone
-salt enrol --keyboard` hands the salt over; the phone keeps it instead of a phone salt.
+With a keyslot of `0x1302` the phone releases, with the phone salt, a seed for this boot alone and,
+once the machine's TPM opened it, shows its keyboard layout full screen and landscape (out of
+screenshots): on every key of a US keyboard its letter small, and large the character it types. You
+type your pepper at the machine through it; nothing keeps the pepper, and the phone forgets the
+layout with the session ([DISK-KEY.md](DISK-KEY.md#a-pepper-typed-through-a-one-time-keyboard-0x1302-0x1402)).
+`phone salt enrol --keyboard-pepper` hands the phone salt over with it.

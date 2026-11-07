@@ -823,7 +823,7 @@ func nextPrompt(recipes []diskkey.Recipe) string {
 	case r == diskkey.RecipeRecovery:
 		return "the password and salt prompt"
 	case r.Keyboard():
-		return "the password prompt, then the keys shown"
+		return "the password prompt, then the pepper through the layout shown"
 	case r == diskkey.RecipePhoneSalt, r == diskkey.RecipeTPMSalt, r.FromVault() && !r.Unattended():
 		return "the password prompt"
 	case r.Unattended():
