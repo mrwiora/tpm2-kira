@@ -124,9 +124,13 @@ class Machine:
         except (OSError, ValueError):
             return None
 
-    def start(self, unlock=True, timeout=600, tpm=True):
+    def start(self, unlock=True, timeout=600, tpm=True, bt=None):
         """Starts the machine; tpm=False without its TPM (a boot whose
-        close must fail: hibernatetest's V4)."""
+        close must fail: hibernatetest's V4). bt: the TCP port of a raw HCI
+        socket (netsimd's --hci-port), the guest's second serial port
+        (ttyS1), which 'btattach -B /dev/ttyS1 -P h4' makes an adapter
+        (tools/phone-vm-test.py); qemu reconnects until it answers. Without
+        it, $LOCALVM_BT."""
         if self.pid():
             print(f"{self.name}: running")
         else:
@@ -144,6 +148,10 @@ class Machine:
                      "--terminate", "--daemon"])
                 tpmdev = ["-chardev", f"socket,id=chrtpm,path={self.path('tpm', 'swtpm-sock')}",
                           "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-crb,tpmdev=tpm0"]
+            btdev = []
+            bt = bt or os.environ.get("LOCALVM_BT")  # tools/phone-vm-test.py: every start of a run, resets too
+            if bt:
+                btdev = ["-chardev", f"socket,id=bt0,host=127.0.0.1,port={int(bt)},reconnect-ms=1000", "-serial", "chardev:bt0"]
             self.mark = os.path.getsize(self.path("serial.log")) if os.path.exists(self.path("serial.log")) else 0
             machine, code, secure = "q35,accel=kvm", OVMF_CODE, []
             if self.secure_boot:
@@ -164,6 +172,7 @@ class Machine:
                  *tpmdev,
                  "-chardev", f"socket,id=ser0,path={self.path('serial.sock')},server=on,wait=off,logfile={self.path('serial.log')},logappend=on",
                  "-serial", "chardev:ser0",
+                 *btdev,
                  "-qmp", f"unix:{self.path('qmp.sock')},server=on,wait=off",
                  "-display", "none", "-daemonize", "-pidfile", self.path("qemu.pid")])
             threading.Thread(target=self.pass_grub_menu, args=(self.mark,), daemon=True).start()
@@ -384,6 +393,7 @@ def main():
     p.add_argument("--no-unlock", action="store_true")
     p.add_argument("--overwrite", action="store_true", help="snapshot: replace fresh or export, which every run depends on")
     p.add_argument("--timeout", type=int, default=600)
+    p.add_argument("--bt", type=int, help="start: the guest's ttyS1 to this raw HCI TCP port (netsimd --hci-port)")
     a = p.parse_args()
     cfg = configparser.ConfigParser()
     if not cfg.read(a.config):
@@ -405,7 +415,7 @@ def main():
         if a.command == "init":
             m.init()
         elif a.command == "start":
-            m.start(unlock=not a.no_unlock, timeout=a.timeout)
+            m.start(unlock=not a.no_unlock, timeout=a.timeout, bt=a.bt)
         elif a.command == "stop":
             m.stop()
         elif a.command == "send":

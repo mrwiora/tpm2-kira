@@ -937,6 +937,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		pcrs := fs.String("pcrs", "", "PCRs to quote (default: the slot's sealed selection)")
 		sha1 := fs.Bool("sha1", false, "Quote the SHA-1 PCR bank instead of SHA-256 (only for a TPM without a SHA-256 bank, or a slot sealed with --sha1)")
 		adapter := fs.Int("adapter", 0, "Bluetooth adapter index (hciN)")
+		adapterWait := fs.Duration("adapter-wait", 0, "Wait this long for the adapter to appear and become free (one just attached is still initialising)")
 		privKey := fs.String("privkey", "", "Signing key for the attestation blob (default: the slot's, else "+signing.DefaultPrivateKeyPath+")")
 		timeout := fs.Duration("timeout", 10*time.Minute, "Give up after this long (0 = wait forever)")
 		verifyTPM := fs.String("verify-tpm", "warn", "If this machine's TPM is not verified as genuine: warn (ask), require (refuse) or off")
@@ -952,7 +953,7 @@ func runPhone(args []string, tpmPath string, debugFlag bool) {
 		}
 		err = admin.AttestEnrol(admin.EnrolOptions{
 			TPMPath: *tpm, SealIndex: uint32(*nvram), Name: *name, PCRs: *pcrs, SHA1: *sha1,
-			Adapter: *adapter, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
+			Adapter: *adapter, AdapterWait: *adapterWait, PrivKeyPath: *privKey, Timeout: *timeout, Debug: *debug,
 			VerifyTPM: vt, VerifyPhone: vp,
 		})
 		if err != nil {

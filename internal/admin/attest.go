@@ -315,6 +315,7 @@ type EnrolOptions struct {
 	PCRs        string
 	SHA1        bool // quote the SHA-1 bank; never chosen without it
 	Adapter     int
+	AdapterWait time.Duration // how long the adapter may take to appear and become free; 0: not at all
 	PrivKeyPath string
 	Timeout     time.Duration
 	Debug       bool
@@ -504,7 +505,7 @@ func AttestEnrol(o EnrolOptions) error {
 	}
 	fmt.Println()
 
-	p, err := ble.Open(ble.Config{Adapter: o.Adapter, Logf: phonegate.DebugLogf(o.Debug)})
+	p, err := ble.Open(ble.Config{Adapter: o.Adapter, Wait: o.AdapterWait, Logf: phonegate.DebugLogf(o.Debug)})
 	if err != nil {
 		return err
 	}
