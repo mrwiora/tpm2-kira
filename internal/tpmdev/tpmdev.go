@@ -354,3 +354,29 @@ func NVRAMIndexExists(tpmDev transport.TPM, index uint32) bool {
 	}
 	return nvPub.DataSize > 0
 }
+
+// NVIndices are the handles of every NV index defined in the TPM, from first on.
+func NVIndices(tpmDev transport.TPM, first uint32) ([]uint32, error) {
+	var out []uint32
+	next := first
+	for {
+		resp, err := (tpm2.GetCapability{Capability: tpm2.TPMCapHandles, Property: next, PropertyCount: 64}).Execute(tpmDev)
+		if err != nil {
+			return out, fmt.Errorf("the TPM's NV indices: %w", err)
+		}
+		list, err := resp.CapabilityData.Data.Handles()
+		if err != nil {
+			return out, fmt.Errorf("the TPM's NV indices: %w", err)
+		}
+		for _, h := range list.Handle {
+			if uint32(h)>>24 != uint32(tpm2.TPMHTNVIndex) {
+				return out, nil // past the NV range
+			}
+			out = append(out, uint32(h))
+			next = uint32(h) + 1
+		}
+		if !resp.MoreData || len(list.Handle) == 0 {
+			return out, nil
+		}
+	}
+}

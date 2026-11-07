@@ -93,7 +93,7 @@ builds on still missing:
 
 | Section | Steps |
 |---|---|
-| Keys & slots | the signing key (and a YubiKey's PIN, stored); the standard sealing - slot 0 to the evaluated PCR selection, acknowledged or custom, and slot 1 the fallback; every slot a line, **picking it deletes the slot whole**; another slot (2-15) to PCRs you choose; approve the slots now; delete everything |
+| Keys & slots | the signing key (and a YubiKey's PIN, stored); the standard sealing - slot 0 to the evaluated PCR selection, acknowledged or custom, and slot 1 the fallback; every slot a line, **picking it deletes the slot whole**; another slot (2-15) to PCRs you choose; approve the slots now; **delete everything** - in three parts, each listed and asked for `delete`: tpm2-kira's LUKS keyslots, the TPM and the EFI variables (`slot delete --yes --sweep`: every slot, the boot settings, the machine-id, the SSH CA, and whatever this or an earlier version left in tpm2-kira's NV range, at aSSH's SSH CA handles or under its EFI GUID), `/etc/tpm2-kira` and `/var/lib/tpm2-kira`; the recovery passphrase stays, the package and its hook too |
 | Phone | enrol a phone; Bluetooth in every boot image; remove a slot's phones |
 | Disk unlock | password + salt; password + phone salt (the phone); this TPM + a vault, or the password + the vault's salt and a pepper typed through its one-time keyboard; password + phone salt + a pepper typed through the phone's one-time keyboard - each a keyslot of its own, enrolled it offers the removal; remove a slot's phone salt |
 | Network & SSH | the image's network (DHCP or static, proposed from the running system; whether the boot announces its address, on by default); the SSH server with the code screen |

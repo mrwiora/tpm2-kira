@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/tpm2-trust/assh/hostkey"
 	"github.com/tpm2-trust/assh/persist"
 	"github.com/tpm2-trust/tpm2-kira/internal/bootclose"
 	"github.com/tpm2-trust/tpm2-kira/internal/efivars"
@@ -234,7 +235,11 @@ func kiraLeftovers(tpmDev transport.TPM, debug bool) []uint32 {
 // An index of another shape at tpm2-kira's own places is shown; force removes
 // it, a terminal asks, and yes alone (the whole of it asked for, not this)
 // leaves it.
-func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug bool) error {
+//
+// sweep takes, besides, everything else at tpm2-kira's places (sweep.go): other
+// indices in its range, aSSH's SSH CA indices, the variables of its GUID - shown
+// first, whatever their shape. Without it they are shown and left.
+func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, sweep, debug bool) error {
 	if nvramIndex != 0 {
 		if err := NVRAMDelete(tpmPath, nvramIndex, slotDeleteForeign(os.Stdout, yes, force), debug); err != nil {
 			return err
@@ -263,6 +268,7 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug boo
 		}
 	}
 	leftovers := kiraLeftovers(tpmDev, debug)
+	extra, sweepErr := sweepFindings(tpmDev)
 	tpmDev.Close()
 	// The SSH CA is tpm2-kira's too: everything of tpm2-kira takes it.
 	caPath := ""
@@ -272,14 +278,21 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug boo
 
 	_, midErr := machineid.Load()
 	mid := midErr == nil
+	extra = notCovered(extra, slots, leftovers, caPath != "", mid)
 	total := len(slots) + len(leftovers)
+	if sweep {
+		total += len(extra)
+	}
 	if caPath != "" {
 		total++
 	}
 	if mid {
 		total++
 	}
-	if total == 0 {
+	if sweepErr != nil {
+		fmt.Printf("The sweep cannot look at everything: %v\n", sweepErr)
+	}
+	if total == 0 && len(extra) == 0 {
 		return fmt.Errorf("nothing of tpm2-kira found: no sealed secrets in NVRAM slots 0x%08X – 0x%08X, no leftover indices, no SSH CA, no sealed machine-id",
 			nvslot.NVRAMSlotStart, nvslot.NVRAMSlotEnd)
 	}
@@ -305,6 +318,19 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug boo
 	}
 	if mid {
 		fmt.Println("Found the sealed machine-id (the EFI variable KIRAmachineID)")
+	}
+	if len(extra) > 0 {
+		if sweep {
+			fmt.Printf("Found %d more at tpm2-kira's places, swept whatever their shape:\n", len(extra))
+		} else {
+			fmt.Printf("Found %d more at tpm2-kira's places, left (--sweep takes them):\n", len(extra))
+		}
+		for _, it := range extra {
+			fmt.Printf("  %s\n", it)
+		}
+	}
+	if total == 0 {
+		return fmt.Errorf("nothing of tpm2-kira's but the above: 'tpm2-kira slot delete --yes --sweep' takes it")
 	}
 	if err := confirmDeleteAll(len(slots), enrolled, len(leftovers), caPath != "", yes); err != nil {
 		return err
@@ -362,6 +388,24 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug boo
 		}
 	}
 
+	if sweep {
+		if tpmDev, err := tpmdev.Open(tpmPath); err != nil {
+			fmt.Printf("The sweep FAILED: %v\n", err)
+			failed++
+		} else {
+			// What is left now, whatever it is: the extra, and what the steps above
+			// left of another shape.
+			if left, err := sweepFindings(tpmDev); err != nil {
+				fmt.Printf("The sweep FAILED: %v\n", err)
+				failed++
+			} else {
+				failed += sweepRemove(tpmDev, left)
+				foreignLeft = false // the sweep took what was of another shape, or counted it as failed
+			}
+			tpmDev.Close()
+		}
+	}
+
 	fmt.Println()
 	if foreignLeft {
 		return fmt.Errorf("%d of %d item(s) failed to delete. An index of another shape stays until a person says so: 'tpm2-kira slot delete' at a terminal shows it and asks; 'tpm2-kira slot delete --yes --force' removes it without asking", failed, total)
@@ -376,6 +420,37 @@ func NVRAMDeleteCommand(tpmPath string, nvramIndex uint32, yes, force, debug boo
 	}
 	fmt.Print(slotKeyslotAdvice(tpmPath))
 	return nil
+}
+
+// notCovered is what of the sweep's findings the deletion of everything does not
+// take on its own: not a listed slot's index or record, not a leftover, not the
+// SSH CA's or the machine-id's, not the close's count (always removed).
+func notCovered(found []sweepItem, slots, leftovers []uint32, ca, mid bool) []sweepItem {
+	nv := map[uint32]bool{}
+	vars := map[string]bool{efivars.Name(bootclose.CounterVar): true}
+	for _, s := range slots {
+		nv[s], nv[nvslot.GenerationIndex(s)], nv[nvslot.AttestCounterIndex(s)] = true, true, true
+		if name, err := nvslot.RecordVar(s); err == nil {
+			vars[efivars.Name(name)] = true
+		}
+	}
+	for _, l := range leftovers {
+		nv[l] = true
+	}
+	if ca {
+		nv[uint32(hostkey.DefaultCounterHandle)], nv[uint32(hostkey.DefaultPINHandle)] = true, true
+		vars[sshCAVar+"-"+persist.VarGUID] = true
+	}
+	if mid {
+		vars[efivars.Name(machineid.Var)] = true
+	}
+	var out []sweepItem
+	for _, it := range found {
+		if (it.Var == "" && !nv[it.NV]) || (it.Var != "" && !vars[it.Var]) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 func confirmDeleteAll(slots, enrolled, leftovers int, ca, yes bool) error {

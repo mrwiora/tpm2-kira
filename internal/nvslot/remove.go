@@ -117,6 +117,17 @@ func removeAt(tpmDev transport.TPM, index uint32, owned persist.Owned) (bool, er
 	return ok, err
 }
 
+// RemoveSwept removes whatever index is at index in tpm2-kira's range,
+// whatever its shape: the sweep's removal (slot delete --sweep), of what a
+// person was shown - every index in the range, of this version's layout, an
+// earlier one's or another program's - and said to take.
+func RemoveSwept(tpmDev transport.TPM, index uint32) (bool, error) {
+	if err := ValidateNVRAMIndex(index); err != nil {
+		return false, err
+	}
+	return removeAt(tpmDev, index, persist.Any)
+}
+
 // Removed is one index a removal took.
 type Removed struct {
 	Index uint32

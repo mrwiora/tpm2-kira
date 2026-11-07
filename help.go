@@ -159,7 +159,8 @@ gives it back as it was when it is left. On the left the sections:
   Keys & slots    the signing key (a YubiKey's PIN stored), slot 0 and the
                   fallback slot 1, another slot to PCRs you choose,
                   approve now, every slot a line that deletes it, delete
-                  everything
+                  everything (the keyslots, the TPM and the EFI variables
+                  swept, the files - each part asked for its word)
   Phone           enrol a phone, Bluetooth in every image, remove phones
   Disk unlock     the keyslots by recipe - enrolled, picking one offers
                   its removal - and the phone salt's removal
@@ -237,7 +238,7 @@ tpm2-kira slot approve [--nvram N] [--pcrs LIST] [--measure-point M]
                        [--privkey PATH] [--pubkey PATH] [--pin-fd N] [--require-key] [--if-moved]
                        [--unattended] [--seal-channel]
 tpm2-kira slot info    [--nvram N] [--json] [--pubkey PATH]
-tpm2-kira slot list | status | delete [--yes]   [--nvram N]
+tpm2-kira slot list | status | delete [--yes] [--sweep]   [--nvram N]
 
 A slot is a boot state your signing key approved: PCR values and a
 generation, in one of the slots 0-15: a record in the EFI variable
@@ -393,13 +394,21 @@ index and record counter (0x01803010-0x0180301F are the slots' numbers).
                    index, the record counter, the boot settings) is shown:
                    a terminal asks, No unless said; --force removes it
                    without asking; --yes alone leaves it and names --force.
-                   Anywhere else nothing removes it.
+                   Anywhere else nothing removes it - but with --sweep.
+                   --sweep (without --nvram): also everything else at
+                   tpm2-kira's places, whatever its shape and whichever
+                   version left it - every NV index in its range
+                   (0x01803000-0x01803FFF), aSSH's SSH CA indices
+                   (0x01802912-15), every EFI variable of its GUID and
+                   KIRAasshCA - listed first; without it they are listed
+                   and left.
                    A LUKS keyslot bound to the slot stays and leaves the
                    slot dirty; 'tpm2-kira control' (the slot's line)
                    deletes a slot whole
 
   tpm2-kira slot list
   tpm2-kira slot delete --nvram 0
+  tpm2-kira slot delete --yes --sweep
 `,
 
 	"status": `tpm2-kira status [--json] [--pubkey PATH] [--conf PATH]

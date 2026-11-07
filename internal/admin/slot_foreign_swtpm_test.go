@@ -89,7 +89,7 @@ func TestForeignGenerationIndexSlotDelete(t *testing.T) {
 			defineAt(t, tpm, gen, oldGeneration)
 			answers(t, tc.lines)
 			var err error
-			out := captureStdout(t, func() { err = NVRAMDeleteCommand(sock, slot, tc.yes, tc.force, false) })
+			out := captureStdout(t, func() { err = NVRAMDeleteCommand(sock, slot, tc.yes, tc.force, false, false) })
 			for _, want := range shown {
 				if !strings.Contains(out, want) {
 					t.Errorf("not shown: %q in\n%s", want, out)
@@ -115,7 +115,7 @@ func TestForeignGenerationIndexSlotDelete(t *testing.T) {
 			if nvslot.ForeignAt(tpm, gen) != nil || !nvslot.SlotExists(tpm, slot) {
 				t.Fatal("a slot sealed afterwards has no generation index of tpm2-kira's")
 			}
-			if err := NVRAMDeleteCommand(sock, slot, false, false, false); err != nil {
+			if err := NVRAMDeleteCommand(sock, slot, false, false, false, false); err != nil {
 				t.Fatalf("the sealed slot, without asking: %v", err)
 			}
 		})
@@ -141,11 +141,11 @@ func TestForeignAtEveryOwnPlace(t *testing.T) {
 			sock, tpm := foreignTPM(t)
 			defineAt(t, tpm, tc.index, ordinary)
 			var err error
-			captureStdout(t, func() { err = NVRAMDeleteCommand(sock, tc.arg, true, false, false) })
+			captureStdout(t, func() { err = NVRAMDeleteCommand(sock, tc.arg, true, false, false, false) })
 			if err == nil || !strings.Contains(err.Error(), tc.flag) || !tpmdev.NVRAMIndexExists(tpm, tc.index) {
 				t.Fatalf("--yes: %v", err)
 			}
-			captureStdout(t, func() { err = NVRAMDeleteCommand(sock, tc.arg, false, true, false) })
+			captureStdout(t, func() { err = NVRAMDeleteCommand(sock, tc.arg, false, true, false, false) })
 			if err != nil || tpmdev.NVRAMIndexExists(tpm, tc.index) {
 				t.Fatalf("--force: %v", err)
 			}
@@ -165,7 +165,7 @@ func TestForeignInSlotDeleteEverything(t *testing.T) {
 	there := []uint32{gen, counter, nvslot.BootSettingsIndex}
 
 	var err error
-	out := captureStdout(t, func() { err = NVRAMDeleteCommand(sock, 0, true, false, false) })
+	out := captureStdout(t, func() { err = NVRAMDeleteCommand(sock, 0, true, false, false, false) })
 	if err == nil || !strings.Contains(err.Error(), "--yes --force") {
 		t.Fatalf("--yes: %v\n%s", err, out)
 	}
@@ -174,7 +174,7 @@ func TestForeignInSlotDeleteEverything(t *testing.T) {
 			t.Errorf("--yes took 0x%08X", index)
 		}
 	}
-	out = captureStdout(t, func() { err = NVRAMDeleteCommand(sock, 0, true, true, false) })
+	out = captureStdout(t, func() { err = NVRAMDeleteCommand(sock, 0, true, true, false, false) })
 	if err != nil {
 		t.Fatalf("--yes --force: %v\n%s", err, out)
 	}
@@ -185,7 +185,7 @@ func TestForeignInSlotDeleteEverything(t *testing.T) {
 	}
 	// --force is no answer to deleting everything.
 	defineAt(t, tpm, gen, oldGeneration)
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, 0, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, 0, false, true, false, false) })
 	if err == nil || !strings.Contains(err.Error(), "--yes") || !tpmdev.NVRAMIndexExists(tpm, gen) {
 		t.Fatalf("--force without a terminal or --yes: %v", err)
 	}
@@ -201,15 +201,15 @@ func TestForceStopsAtTheOwnPlaces(t *testing.T) {
 		defineAt(t, tpm, index, ordinary)
 	}
 	var err error
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, reserved, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, reserved, false, true, false, false) })
 	if !errors.Is(err, persist.ErrNotOurs) || !strings.Contains(err.Error(), "not one of tpm2-kira's own places") {
 		t.Errorf("the rest of the range: %v", err)
 	}
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, outside, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, outside, false, true, false, false) })
 	if err == nil || !strings.Contains(err.Error(), "outside the safe application range") {
 		t.Errorf("outside the range: %v", err)
 	}
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, slotNumber, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, slotNumber, false, true, false, false) })
 	if err == nil || !strings.Contains(err.Error(), "nothing to delete") {
 		t.Errorf("a slot's number: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestRemovalUnderAnOwnerPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	var err error
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, nvslot.NVRAMSlotStart, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, nvslot.NVRAMSlotStart, false, true, false, false) })
 	if err == nil || strings.Count(err.Error(), "has a password") != 2 || !strings.Contains(err.Error(), "tpm2_changeauth") || !errors.Is(err, tpm2.TPMRCBadAuth) {
 		t.Fatalf("under an owner's password: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestRemovalUnderAnOwnerPassword(t *testing.T) {
 		NewAuth: tpm2.TPM2BAuth{}}).Execute(tpm); err != nil {
 		t.Fatal(err)
 	}
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, nvslot.NVRAMSlotStart, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, nvslot.NVRAMSlotStart, false, true, false, false) })
 	if err != nil {
 		t.Fatalf("the password gone: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestPlatformIndexAtAnOwnPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	var err error
-	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, nvslot.NVRAMSlotStart, false, true, false) })
+	captureStdout(t, func() { err = NVRAMDeleteCommand(sock, nvslot.NVRAMSlotStart, false, true, false, false) })
 	if err == nil || !strings.Contains(err.Error(), "platform's firmware defined it") {
 		t.Fatalf("the platform's index: %v", err)
 	}

@@ -1892,8 +1892,10 @@ WantedBy=sysinit.target
         self.check("the SSH CA's EFI variable is gone", not there(ca_var))
         self.check("the sealed machine-id's EFI variable is gone", not there(self.MID_VAR))
         self.check("its public key /etc/tpm2-kira/ssh_ca.pub is gone", not there("/etc/tpm2-kira/ssh_ca.pub"))
-        rc, out = self.run("tpm2-kira slot delete --yes 2>&1")
-        self.check("slot delete again: nothing of tpm2-kira is found", "nothing of tpm2-kira found" in out, out[-300:])
+        rc, out = self.run("tpm2-kira slot delete --yes --sweep 2>&1", save="slot-delete-sweep.log")
+        self.check("slot delete --sweep after it: nothing of tpm2-kira is left at its places", "nothing of tpm2-kira found" in out, out[-300:])
+        rc, out = self.run("ls /sys/firmware/efi/efivars | grep -c 67f474ef-94a1-4412-88df-d62349d430a9; true")
+        self.check("no EFI variable of tpm2-kira's GUID is left", out.strip().split("\n")[-1] == "0", out.strip())
 
     def make_setup(self, reset=None, secure=False):
         """The steps up to the first reboot. The packages arrive while the machine goes back to

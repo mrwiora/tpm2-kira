@@ -118,7 +118,7 @@ func (c *controller) annotate(s controlStep) controlStep {
 			s.Destroys = "slot " + arg + " whole: its TOTP key (the authenticator's code stops matching), its phones, its phone salt, the vault's local part, the LUKS keyslots bound to it"
 		}
 	case "delete-all":
-		cmd, s.Danger = "tpm2-kira slot delete"+tpm+" --yes", dangerDestroy
+		cmd, s.Danger = "tpm2-kira luks remove DEVICE --keyslot N (each of tpm2-kira's); tpm2-kira slot delete"+tpm+" --yes --sweep; rm -r "+strings.Join(kiraDirs, " "), dangerDestroy
 	case "channel":
 		cmd = "tpm2-kira slot approve" + tpm + " --nvram " + arg + " --seal-channel"
 	case "attest":
@@ -277,29 +277,114 @@ func (c *controller) approveStep() controlStep {
 	return s
 }
 
-// deleteAllStep removes everything of tpm2-kira's from the TPM.
+// kiraDirs are the directories of tpm2-kira's own files: the keys and the
+// configuration, and the state (recovery blobs, the adapters' firmware names). Vars:
+// the tests' own.
+var kiraDirs = []string{"/etc/tpm2-kira", "/var/lib/tpm2-kira"}
+
+// kiraKeyslot is a LUKS keyslot with a tpm2-kira token.
+type kiraKeyslot struct {
+	device  string
+	keyslot int
+}
+
+// kiraKeyslots are every keyslot of tpm2-kira's, on every device.
+func (c *controller) kiraKeyslots() []kiraKeyslot {
+	var out []kiraKeyslot
+	for _, d := range c.facts.Status.Devices {
+		for _, ks := range d.Keyslots {
+			if ks.Token != nil {
+				out = append(out, kiraKeyslot{d.Device, ks.Keyslot})
+			}
+		}
+	}
+	return out
+}
+
+// deleteAllStep removes everything of tpm2-kira's from the machine, in three parts,
+// each shown and asked for its word: the LUKS keyslots of tpm2-kira's, the TPM and the
+// EFI variables (slot delete --yes --sweep), and the files.
 func (c *controller) deleteAllStep() controlStep {
 	f := &c.facts
-	s := controlStep{Key: "delete-all", Title: "Delete everything of tpm2-kira's in the TPM", Optional: true, SelfConfirm: true,
-		Explain:  "Every slot, what is left of half-gone ones, the boot settings, the sealed machine-id and the SSH CA - the TPM as before tpm2-kira. LUKS keyslots that are not tpm2-kira's (the recovery passphrase) stay; tpm2-kira's keyslots open nothing afterwards.",
-		Destroys: "every slot (all TOTP keys, phones, phone salts, the vault's local parts), the boot settings, the sealed machine-id and the SSH CA",
-		Run: func(c *controller) error {
-			ok, err := c.confirmDestroy("Delete everything of tpm2-kira's in the TPM?", "every slot, the boot settings, the sealed machine-id and the SSH CA", "delete")
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return errKept
-			}
-			return NVRAMDeleteCommand(c.o.TPMPath, 0, true, false, c.o.Debug)
-		}}
+	s := controlStep{Key: "delete-all", Title: "Delete everything of tpm2-kira's on this machine", Optional: true, SelfConfirm: true,
+		Explain: "In three parts, each shown and asked for on its own: tpm2-kira's LUKS keyslots; the TPM and the EFI variables - every slot, " +
+			"the boot settings, the sealed machine-id, the SSH CA, and whatever this or an earlier version left at tpm2-kira's places; " +
+			"the files in /etc/tpm2-kira and /var/lib/tpm2-kira. The recovery passphrase's keyslot stays. The package stays installed: " +
+			"its hook is still in the boot image until it is taken out of HOOKS or the package is removed.",
+		Destroys: "tpm2-kira's LUKS keyslots; every slot (all TOTP keys, phones, phone salts, the vault's local parts), the boot settings, the sealed machine-id, the SSH CA and everything else at tpm2-kira's places in the TPM and the EFI variables; the signing key's files, the configuration, the PIN, the PCR key and the state",
+		Run:      (*controller).runDeleteAll}
+	_, dirsErr := os.Stat(kiraDirs[0])
 	switch {
-	case f.TPMErr != "":
-		s.Blocked = "no TPM: " + f.TPMErr
-	case len(f.Status.Slots) == 0 && len(f.Dirt) == 0 && f.SSHCA.CA == nil:
-		s.Blocked = "nothing of tpm2-kira's is in the TPM"
+	case f.TPMErr != "" && len(c.kiraKeyslots()) == 0 && dirsErr != nil:
+		s.Blocked = "no TPM, no keyslot and no file of tpm2-kira's"
 	}
 	return s
+}
+
+// runDeleteAll is the three parts, each on its own word: a No to one goes on with the
+// next.
+func (c *controller) runDeleteAll() error {
+	var done []string
+	if ks := c.kiraKeyslots(); len(ks) > 0 {
+		var names []string
+		for _, k := range ks {
+			names = append(names, fmt.Sprintf("keyslot %d of %s", k.keyslot, k.device))
+		}
+		fmt.Fprintf(c.out, "1. tpm2-kira's LUKS keyslots: %s. Removing each asks for a remaining passphrase (the recovery one).\n\n", strings.Join(names, ", "))
+		ok, err := c.confirmDestroy("Remove tpm2-kira's LUKS keyslots?", strings.Join(names, ", ")+": the ways tpm2-kira opens the disk", "delete")
+		if err != nil {
+			return err
+		}
+		if ok {
+			for _, k := range ks {
+				if err := LuksRemove(LuksRemoveOptions{Device: k.device, Keyslot: k.keyslot, TPMPath: c.o.TPMPath}); err != nil {
+					return fmt.Errorf("keyslot %d of %s: %w", k.keyslot, k.device, err)
+				}
+			}
+			done = append(done, "the keyslots")
+		}
+	}
+	if c.facts.TPMErr == "" {
+		fmt.Fprintln(c.out, "\n2. The TPM and the EFI variables: every slot, the boot settings, the sealed machine-id, the SSH CA, and what this or an earlier version left at tpm2-kira's places, whatever its shape.")
+		fmt.Fprintln(c.out)
+		ok, err := c.confirmDestroy("Delete everything of tpm2-kira's in the TPM and the EFI variables?", "all of the above in the TPM and the EFI variables", "delete")
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := NVRAMDeleteCommand(c.o.TPMPath, 0, true, false, true, c.o.Debug); err != nil && !strings.Contains(err.Error(), "nothing of tpm2-kira") {
+				return err
+			}
+			done = append(done, "the TPM and the EFI variables")
+		}
+	}
+	var dirs []string
+	for _, d := range kiraDirs {
+		if _, err := os.Stat(d); err == nil {
+			dirs = append(dirs, d)
+		}
+	}
+	if len(dirs) > 0 {
+		fmt.Fprintf(c.out, "\n3. The files: %s - the signing key's files (a YubiKey's key itself stays on the token), control.conf and assh.conf, the PIN, the PCR key, the keys that may log in at boot, the recovery blobs. A slot sealed afterwards needs a new signing key (setup).\n\n", strings.Join(dirs, " and "))
+		ok, err := c.confirmDestroy("Remove "+strings.Join(dirs, " and ")+"?", strings.Join(dirs, " and ")+", whole", "delete")
+		if err != nil {
+			return err
+		}
+		if ok {
+			for _, d := range dirs {
+				if err := os.RemoveAll(d); err != nil {
+					return err
+				}
+				fmt.Fprintf(c.out, "Removed %s\n", d)
+			}
+			done = append(done, "the files")
+		}
+	}
+	if len(done) == 0 {
+		return errKept
+	}
+	fmt.Fprintf(c.out, "\nRemoved: %s. The boot image still carries tpm2-kira's hook: take sd-tpm2-kira out of HOOKS (or remove the package) and rebuild it.\n", strings.Join(done, ", "))
+	return nil
 }
 
 // phoneRemoveSteps are a line per slot with phones: removing them.

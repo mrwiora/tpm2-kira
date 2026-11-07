@@ -580,7 +580,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	s.tpm.Close() // the commands open the TPM themselves; swtpm serves one client
 
 	// One slot: 'slot delete --nvram 0' takes the blob and its counter.
-	if err := NVRAMDeleteCommand(sock, slot0, false, false, false); err != nil {
+	if err := NVRAMDeleteCommand(sock, slot0, false, false, false, false); err != nil {
 		t.Fatalf("deleting a foreign slot: %v", err)
 	}
 	record := func(idx uint32) bool { _, err := nvslot.ReadRecord(idx); return err == nil }
@@ -597,7 +597,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 	}
 
 	// Everything: the other slot, and the counter that belongs to no slot.
-	if err := NVRAMDeleteCommand(sock, 0, true, false, false); err != nil {
+	if err := NVRAMDeleteCommand(sock, 0, true, false, false, false); err != nil {
 		t.Fatalf("slot delete: %v", err)
 	}
 	for idx := uint32(nvslot.AppNVRAMStart); idx <= nvslot.AppNVRAMEnd; idx++ {
@@ -609,7 +609,7 @@ func TestStaleSlotCanBeRemoved(t *testing.T) {
 		t.Fatal("slot 5's record survived 'slot delete'")
 	}
 	// Nothing left: it says so instead of claiming success.
-	if err := NVRAMDeleteCommand(sock, 0, true, false, false); err == nil || !strings.Contains(err.Error(), "nothing of tpm2-kira") {
+	if err := NVRAMDeleteCommand(sock, 0, true, false, false, false); err == nil || !strings.Contains(err.Error(), "nothing of tpm2-kira") {
 		t.Fatalf("second slot delete: %v", err)
 	}
 
