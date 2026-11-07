@@ -393,6 +393,9 @@ func KeyboardSalt(salt, pepper []byte) []byte {
 // A wrong pepper of the right form makes a key that opens nothing, as a mistyped password does.
 func keyboardKey(volume string, vaultErr error, salt []byte, sess KeyboardSession, ask Prompter) ([]byte, error) {
 	defer wipe.Bytes(salt)
+	if w, ok := sess.(interface{ Wipe() }); ok {
+		defer w.Wipe() // this prompt's copy of the layout; another prompt takes another
+	}
 	note := "the key is derived from your password, the salt " + sess.From() + " released and your pepper.\n" +
 		"Type the pepper through the one-time layout " + sess.From() + " shows: for each character, the key it\n" +
 		"is shown on. The layout holds for this boot alone.\n" +

@@ -24,6 +24,16 @@ type KeyboardSession struct {
 // From implements diskkey.KeyboardSession.
 func (s *KeyboardSession) From() string { return "the vault" }
 
+// Wipe clears the layout; the prompt that took the session calls it when done.
+func (s *KeyboardSession) Wipe() { s.layout.Wipe() }
+
+// copy is a session of its own for one prompt, which wipes it: a prompt asked again (Debian's
+// tries=) takes another copy of the same layout.
+func (s *KeyboardSession) copy() *KeyboardSession {
+	l := *s.layout
+	return &KeyboardSession{layout: &l}
+}
+
 // Pepper implements diskkey.KeyboardSession.
 func (s *KeyboardSession) Pepper(typed []byte) ([]byte, error) {
 	p, err := s.layout.Pepper(typed)

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -1204,99 +1205,51 @@ func TestQuickWorkflow(t *testing.T) {
 	t.Log("✓ Quick workflow completed successfully")
 }
 
-// TestExitCodes verifies that all commands return exit code 0 even with errors
+// TestExitCodes: a command's status says what its words say - 1 with the FAILED marker, 0
+// without - for commands that succeed and commands that fail, a PCR mismatch among them.
 func TestExitCodes(t *testing.T) {
 	tpmPath, cleanup := setupSoftwareTPM(t)
 	defer cleanup()
-
 	nvramIndex := "0x01803010"
-
-	t.Log("=== Testing Exit Codes ===")
-
-	var stdout, stderr bytes.Buffer
-	var cmd *exec.Cmd
-	var err error
-
-	// Test 2: Seal and then extend PCR to cause mismatch
-	t.Log("Test 2: Seal with PCR 0,23...")
-	_, _, err = runTPMKira(t, tpmPath,
-		"slot", "add", "--totp",
-		"--nvram", nvramIndex,
-		"--pcrs", "0,23",
-		"--pubkey", testPubKeyPath,
-		"--privkey", testPrivKeyPath,
-	)
-	if err != nil {
-		t.Fatalf("Seal failed: %v", err)
+	if _, _, err := runTPMKira(t, tpmPath, "slot", "add", "--totp", "--nvram", nvramIndex, "--pcrs", "0,23",
+		"--pubkey", testPubKeyPath, "--privkey", testPrivKeyPath); err != nil {
+		t.Fatalf("seal: %v", err)
 	}
-	t.Log("✓ Seal successful")
-
-	// Test 4: Extend PCR 23
-	t.Log("Test 4: Extending PCR 23...")
 	extendCmd := exec.Command("tpm2_pcrextend", "23:sha256=0000000000000000000000000000000000000000000000000000000000000000")
 	extendCmd.Env = append(os.Environ(), "TPM2TOOLS_TCTI=swtpm:path="+tpmPath)
 	if output, err := extendCmd.CombinedOutput(); err != nil {
-		t.Fatalf("Failed to extend PCR: %v\nOutput: %s", err, output)
+		t.Fatalf("extending PCR 23: %v\n%s", err, output)
 	}
-	t.Log("✓ PCR 23 extended")
-
-	// Test 7: Info command on slot with PCR mismatch
-	t.Log("Test 7: Info command with PCR mismatch...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "slot", "info", "--tpm", tpmPath, "--nvram", nvramIndex)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ Info with PCR mismatch returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ Info with PCR mismatch returned exit code 0")
+	failed := 0
+	for name, args := range map[string][]string{
+		"slot info, a PCR mismatch":                  {"slot", "info", "--nvram", nvramIndex},
+		"slot approve without the signing key given": {"slot", "approve", "--nvram", nvramIndex},
+		"slot status of an empty index":              {"slot", "status", "--nvram", "0x0180301D"},
+		"slot delete of an empty index":              {"slot", "delete", "--nvram", "0x0180301E"},
+		"slot add with a public key that is none":    {"slot", "add", "--totp", "--nvram", "0x0180301C", "--pcrs", "0", "--pubkey", "/nonexistent", "--privkey", testPrivKeyPath},
+	} {
+		cmd := exec.Command("./tpm2-kira", append([]string{"--tpm", tpmPath}, args...)...)
+		var out bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &out
+		err := cmd.Run()
+		code := 0
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			code = exit.ExitCode()
+		} else if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		saysFailed := strings.Contains(out.String(), "tpm2-kira: FAILED:")
+		if saysFailed {
+			failed++
+		}
+		if want := map[bool]int{true: 1, false: 0}[saysFailed]; code != want {
+			t.Errorf("%s: exit %d, but its words say FAILED=%v:\n%s", name, code, saysFailed, out.String())
+		}
 	}
-
-	// Test 8: Reseal without private key when PCRs changed (should show error but exit 0)
-	t.Log("Test 8: Reseal without signing key when PCRs changed (should show error but exit 0)...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "slot", "approve", "--tpm", tpmPath, "--nvram", nvramIndex)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ Reseal without signing key returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ Reseal without signing key returned exit code 0")
+	if failed == 0 {
+		t.Error("no case failed: the test shows nothing of a failure's status")
 	}
-
-	// Test 9: NVRAM status on non-existent index
-	t.Log("Test 9: NVRAM status on non-existent index...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "slot", "status", "--tpm", tpmPath, "--nvram", "0x0180301D")
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ NVRAM status on non-existent index returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ NVRAM status on non-existent index returned exit code 0")
-	}
-
-	// Test 10: Delete non-existent NVRAM index
-	t.Log("Test 10: NVRAM delete on non-existent index...")
-	stdout.Reset()
-	stderr.Reset()
-	cmd = exec.Command("./tpm2-kira", "slot", "delete", "--tpm", tpmPath, "--nvram", "0x0180301E")
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		t.Errorf("✗ NVRAM delete on non-existent index returned non-zero exit code: %v", err)
-	} else {
-		t.Log("✓ NVRAM delete on non-existent index returned exit code 0")
-	}
-
-	t.Log("✓ All exit code tests passed")
 }
 
 // TestResealNeedsItsKeyGiven checks that a slot sealed with a custom key is

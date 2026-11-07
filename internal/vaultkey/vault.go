@@ -33,6 +33,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
@@ -574,6 +575,7 @@ func isVerification(err error) bool {
 // the key provider to answer with: an unattended recipe's key, a typed
 // recipe's salt; done is closed when every slot has been tried.
 type Keys struct {
+	mu        sync.Mutex // the maps, against Forget at run's end
 	keys      map[int][]byte
 	salts     map[int][]byte
 	keyboards map[int]*KeyboardSession
@@ -677,6 +679,8 @@ func (vk *Keys) ForVolume(volume string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	vk.mu.Lock()
+	defer vk.mu.Unlock()
 	for _, t := range toks {
 		if t.Obsolete || !t.Recipe.Unattended() || t.Slot == nil {
 			continue
@@ -704,6 +708,8 @@ func (vk *Keys) SaltFor(volume string, r diskkey.Recipe) []byte {
 	if err != nil || tok.Slot == nil {
 		return nil
 	}
+	vk.mu.Lock()
+	defer vk.mu.Unlock()
 	if salt, ok := vk.salts[*tok.Slot]; ok {
 		return append([]byte(nil), salt...)
 	}
@@ -721,10 +727,33 @@ func (vk *Keys) KeyboardFor(volume string, r diskkey.Recipe) diskkey.KeyboardSes
 	if err != nil || tok.Slot == nil {
 		return nil
 	}
+	vk.mu.Lock()
+	defer vk.mu.Unlock()
 	if sess, ok := vk.keyboards[*tok.Slot]; ok {
-		return sess
+		return sess.copy()
 	}
 	return nil
+}
+
+// Forget wipes what the vault released and the TPM opened - the keys, the salts, the keyboards'
+// layouts - once the boot is done with them (run's end); nil-safe. It waits for the attempt.
+func (vk *Keys) Forget() {
+	if vk == nil {
+		return
+	}
+	<-vk.done
+	vk.mu.Lock()
+	defer vk.mu.Unlock()
+	for _, k := range vk.keys {
+		wipe.Bytes(k)
+	}
+	for _, s := range vk.salts {
+		wipe.Bytes(s)
+	}
+	for _, kb := range vk.keyboards {
+		kb.Wipe()
+	}
+	vk.keys, vk.salts, vk.keyboards = map[int][]byte{}, map[int][]byte{}, map[int]*KeyboardSession{}
 }
 
 // ── enrolment, status, removal ────────────────────────────────────────────

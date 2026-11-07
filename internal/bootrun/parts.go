@@ -313,6 +313,7 @@ func (p *sshPart) end(*board) {
 // separator); a key made ends the hold on its own. The attempt lasts as
 // long as the hold.
 type vaultPart struct {
+	keys   *vaultkey.Keys
 	cancel context.CancelFunc
 	quit   chan struct{}
 	done   <-chan struct{} // closed once every slot has been tried
@@ -330,6 +331,7 @@ func (p *vaultPart) start(bd *board) {
 	if keys == nil {
 		return
 	}
+	p.keys = keys
 	bd.vaultKey, bd.vaultSalt, bd.vaultKeyboard = keys.ForVolume, keys.SaltFor, keys.KeyboardFor
 	p.done = keys.Ready()
 	go func() {
@@ -360,7 +362,8 @@ func (p *vaultPart) released(*board, string) {
 	}
 }
 
-func (p *vaultPart) end(*board) {}
+// end wipes what the vault released, as the phone's part does: the boot is done with it.
+func (p *vaultPart) end(*board) { p.keys.Forget() }
 
 // tpmSaltPart opens the TPM salts (recipe 0x1200) as the boot starts,
 // while the code screen holds - the only time the slot's policy holds -

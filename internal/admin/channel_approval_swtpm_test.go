@@ -247,7 +247,7 @@ exec %q "$@"
 	if out, err := run(); err != nil || !strings.Contains(out, "phone channel was left") {
 		t.Errorf("no terminal, no flag: %v\n%s", err, out)
 	}
-	// (A failure of tpm2-kira exits 0, by design: it says so.)
+	// (A failure exits 1: only the words are looked at here.)
 	if out, _ := run("--unattended", "--seal-channel"); !strings.Contains(out, "a person's decision") {
 		t.Errorf("--unattended --seal-channel:\n%s", out)
 	}
